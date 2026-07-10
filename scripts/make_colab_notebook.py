@@ -28,8 +28,8 @@ Requires a Kaggle API token in Colab secrets as `KAGGLE_USERNAME` / `KAGGLE_KEY`
 """
 
 CONFIG_CELL = """\
-REPO_URL = "https://github.com/UnnatPar/neutrinojepa.git"
-REPO_DIR = "/content/neutrinojepa"
+REPO_URL = "https://github.com/UnnatPar/WSSEF-2027.git"
+REPO_DIR = "/content/WSSEF-2027"
 DRIVE_CHECKPOINT_DIR = "/content/drive/MyDrive/neutrinojepa_checkpoints"
 """
 
