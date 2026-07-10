@@ -1,0 +1,33 @@
+model:
+  d: 256
+  L: 6
+  k: 8
+  ema_decay: 0.996
+
+masking:
+  ratio_min: 0.4
+  ratio_max: 0.6
+  n_clusters: 4
+
+training:
+  batch_size: 256
+  lr: 1.0e-3
+  weight_decay: 0.05
+  epochs: 100
+  grad_clip: 1.0
+  num_workers: 8
+
+data:
+  max_pulses: 256
+  batch_dir: data/train/
+  meta_path: data/train_meta.parquet
+  geometry_path: data/sensor_geometry.csv
+  train_batches: [1, 50]
+
+logging:
+  project: neutrinojepa
+  run_name: pretrain_jepa_v1
+
+checkpoint:
+  dirpath: checkpoints/pretrain_jepa_v1/
+  filename: "epoch{epoch}"

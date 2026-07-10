@@ -1,0 +1,34 @@
+model:
+  checkpoint: checkpoints/pretrain_jepa_v1/epoch99.ckpt  # point at pretrain_mae_v1 for experiment 1 instead
+  freeze_encoder: false
+  d: 256
+  L: 6
+  k: 8
+
+training:
+  batch_size: 256
+  lr_encoder: 1.0e-4
+  lr_heads: 1.0e-3
+  weight_decay: 0.05
+  epochs: 50
+  grad_clip: 1.0
+  lambda_direction: 1.0
+  lambda_classification: 0.5
+  early_stopping_patience: 5
+
+data:
+  max_pulses: 256
+  batch_dir: data/train/
+  meta_path: data/train_meta.parquet
+  geometry_path: data/sensor_geometry.csv
+  train_batches: [1, 594]
+  val_batches: [595, 627]
+  test_batches: [628, 660]
+
+logging:
+  project: neutrinojepa
+  run_name: finetune_v1
+
+checkpoint:
+  dirpath: checkpoints/finetune_v1/
+  filename: "epoch{epoch}"
