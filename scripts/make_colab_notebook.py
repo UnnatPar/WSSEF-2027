@@ -28,8 +28,7 @@ Requires a Kaggle API token in Colab secrets as `KAGGLE_USERNAME` / `KAGGLE_KEY`
 """
 
 CONFIG_CELL = """\
-# -- Fill in before running --
-REPO_URL = "https://github.com/<your-username>/neutrinojepa.git"  # EDIT ME
+REPO_URL = "https://github.com/UnnatPar/neutrinojepa.git"
 REPO_DIR = "/content/neutrinojepa"
 DRIVE_CHECKPOINT_DIR = "/content/drive/MyDrive/neutrinojepa_checkpoints"
 """
