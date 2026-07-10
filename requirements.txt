@@ -1,0 +1,14 @@
+# Install torch and PyG extensions separately per scripts/download_data.sh header comments —
+# pip's requirements.txt cannot express the two custom index URLs those need.
+lightning==2.3.0
+torch-ema==0.3.0
+graphnet>=1.0
+pandas==2.2.0
+pyarrow==15.0.0
+numpy==1.26.0
+pyyaml
+tqdm
+scikit-learn
+wandb
+pytest
+nbformat

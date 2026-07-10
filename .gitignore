@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+data/train/
+data/train_meta.parquet
+data/sensor_geometry.csv
+checkpoints/
+wandb/
+*.egg-info/
+.pytest_cache/
