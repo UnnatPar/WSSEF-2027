@@ -100,6 +100,14 @@ def test_build_supervised_model_loads_encoder_weights_from_jepa_checkpoint(tmp_p
     assert all(not p.requires_grad for p in supervised_model.encoder.parameters())
 
 
+def test_validation_step_logs_val_angular_error():
+    model = SupervisedFineTune(make_cfg())
+    batch = make_labeled_batch(with_pid=False)
+    loss = model.validation_step(batch, batch_idx=0)
+    assert loss.dim() == 0
+    assert torch.isfinite(loss)
+
+
 def test_build_supervised_model_random_init_when_checkpoint_is_none():
     model_a = build_supervised_model(make_cfg(freeze_encoder=False), None)
     model_b = build_supervised_model(make_cfg(freeze_encoder=False), None)

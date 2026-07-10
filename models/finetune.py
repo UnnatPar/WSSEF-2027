@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from graphnet.training.loss_functions import VonMisesFisher3DLoss
 from torch import nn
 
+from eval.metrics import mean_angular_error
 from models.heads import ClassificationHead, DirectionHead
 from models.pet import PETEncoder
 
@@ -47,11 +48,13 @@ class SupervisedFineTune(pl.LightningModule):
             for p in self.encoder.parameters():
                 p.requires_grad_(False)
 
-    def training_step(self, batch, batch_idx):
+    def _forward(self, batch):
         g = self.encoder.encode_event(batch.x, batch.batch)
         az, zen = self.direction_head(g)
         kappa = self.kappa_head(g)
+        return g, az, zen, kappa
 
+    def _compute_loss(self, batch, g, az, zen, kappa):
         pred_vec = _to_cartesian(az, zen)
         pred = torch.cat([pred_vec, kappa], dim=-1)
         true_vec = _to_cartesian(batch.azimuth, batch.zenith)
@@ -65,9 +68,22 @@ class SupervisedFineTune(pl.LightningModule):
                 cls_logits, batch.pid.float().view(-1, 1)
             )
             loss = loss + self.cfg.lambda_classification * classification_loss
+        return loss
 
+    def training_step(self, batch, batch_idx):
+        g, az, zen, kappa = self._forward(batch)
+        loss = self._compute_loss(batch, g, az, zen, kappa)
         n_events = int(batch.batch.max().item()) + 1
         self.log("train/loss", loss, batch_size=n_events)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        g, az, zen, kappa = self._forward(batch)
+        loss = self._compute_loss(batch, g, az, zen, kappa)
+        angular_error = mean_angular_error(az, zen, batch.azimuth, batch.zenith)
+        n_events = int(batch.batch.max().item()) + 1
+        self.log("val/loss", loss, batch_size=n_events)
+        self.log("val/angular_error", angular_error, batch_size=n_events)
         return loss
 
     def configure_optimizers(self):
