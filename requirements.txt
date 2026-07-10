@@ -1,8 +1,20 @@
-# Install torch and PyG extensions separately per scripts/download_data.sh header comments —
-# pip's requirements.txt cannot express the two custom index URLs those need.
+# INSTALL ORDER MATTERS: install torch + PyG extensions (see
+# scripts/download_data.sh-adjacent notes / STEP-02) LAST, after everything in
+# this file. graphnet's own dependency chain (torchscale, pytorch-lightning)
+# has no upper bound on torch and WILL silently upgrade it past the pin if
+# installed afterward. Verified by direct testing, not assumed.
 lightning==2.3.0
 torch-ema==0.3.0
-graphnet>=1.0
+# NOTE: "graphnet" on PyPI is an unrelated graph-visualization package (name
+# collision) -- the real graphnet-team/graphnet neutrino library is source-only,
+# installed from GitHub via this PEP 508 direct reference.
+graphnet @ git+https://github.com/graphnet-team/graphnet.git
+# graphnet pulls its own pytorch_lightning + torchmetrics + torchvision chain
+# (separate from the `lightning` package this project uses directly) -- pinned
+# to versions compatible with torch==2.3.0, verified by direct testing.
+pytorch-lightning==2.3.0
+torchvision==0.18.0
+torchscale==0.2.0
 pandas==2.2.0
 pyarrow==15.0.0
 numpy==1.26.0
@@ -12,3 +24,6 @@ scikit-learn
 wandb
 pytest
 nbformat
+# setuptools>=81 removed pkg_resources, which lightning/graphnet's older
+# releases still import at module load time. Verified by direct testing.
+setuptools<81

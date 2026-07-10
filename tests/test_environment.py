@@ -15,10 +15,20 @@ PINNED = {
 }
 
 
+def _normalize(version: str) -> tuple:
+    # Strip local build tags (e.g. "2.3.0+cpu", "1.6.3+pt23cpu") and pad
+    # short versions (e.g. torch_ema's "0.3") to 3 parts for comparison.
+    core = version.split("+")[0]
+    parts = [int(p) for p in core.split(".")]
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts)
+
+
 @pytest.mark.parametrize("module_name,expected_version", PINNED.items())
 def test_pinned_version(module_name, expected_version):
     mod = importlib.import_module(module_name)
-    assert mod.__version__ == expected_version, (
+    assert _normalize(mod.__version__) == _normalize(expected_version), (
         f"{module_name} is {mod.__version__}, expected {expected_version}"
     )
 
