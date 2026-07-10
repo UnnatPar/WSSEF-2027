@@ -38,17 +38,21 @@ def test_graphnet_importable():
 
 
 def test_graphnet_kaggle_symbols_exist():
-    # Verifies the exact GraphNeT symbols train/data.py depends on. Fail
-    # loudly here rather than deep in a data-loading stack trace if a
-    # graphnet version bump ever moves/renames them.
-    from graphnet.data.constants import FEATURES, TRUTH
-    from graphnet.data.dataloader import DataLoader  # noqa: F401
-    from graphnet.data.dataset import ParquetDataset  # noqa: F401
-    from graphnet.models.data_representation import GraphDefinition, KNNGraph  # noqa: F401
-    from graphnet.models.detector.icecube import IceCubeKaggle  # noqa: F401
+    # Verifies the exact GraphNeT symbols this plan depends on. Fail loudly
+    # here rather than deep in a data-loading stack trace if a graphnet
+    # version bump ever moves/renames them.
+    #
+    # NOTE: graphnet.data.dataset.ParquetDataset is NOT used by train/data.py
+    # despite the name -- verified by direct testing, it expects its own
+    # converted chunked directory format (produced by GraphNeT's
+    # DataConverter/ParquetWriter), not the raw Kaggle competition files.
+    # train/data.py reads the raw files itself and only reuses
+    # IceCubeKaggle().feature_map() for normalization.
+    from graphnet.models.detector.icecube import IceCubeKaggle
+    from graphnet.training.loss_functions import VonMisesFisher3DLoss  # noqa: F401
 
-    assert FEATURES.KAGGLE == ["x", "y", "z", "time", "charge", "auxiliary"]
-    assert set(TRUTH.KAGGLE) == {"zenith", "azimuth"}
+    feature_map = IceCubeKaggle().feature_map()
+    assert set(feature_map.keys()) == {"x", "y", "z", "time", "charge", "auxiliary"}
 
 
 def test_pyg_extension_ops_work():
