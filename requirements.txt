@@ -24,6 +24,8 @@ scikit-learn
 wandb
 pytest
 nbformat
+matplotlib
+tabulate
 # setuptools>=81 removed pkg_resources, which lightning/graphnet's older
 # releases still import at module load time. Verified by direct testing.
 setuptools<81
