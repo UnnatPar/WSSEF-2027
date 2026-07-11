@@ -44,25 +44,16 @@ class MaxPulsesDataset(Dataset):
 class KaggleParquetDataset(Dataset):
     """Loads IceCube Kaggle-competition-schema parquet files directly.
 
-    GraphNeT's own graphnet.data.dataset.ParquetDataset CANNOT read these
-    raw files -- verified by direct testing, not assumed. It expects its own
-    converted, chunked directory layout
-    (path/<table_name>/<table_name>_<chunk_id>.parquet, indexed by
-    "event_no"), produced by GraphNeT's DataConverter/ParquetWriter -- not
-    the competition's flat batch_N.parquet files (event_id, sensor_id, time,
-    charge, auxiliary) plus a separate sensor_geometry.csv and
-    train_meta.parquet. So this dataset does the geometry join and
-    normalization itself, reusing GraphNeT's real IceCubeKaggle().feature_map()
-    functions rather than re-deriving them (also verified by direct testing:
-    the real normalization is x,y,z/500, time=(t-1e4)/3e4, charge=log10(q)/3,
-    auxiliary unchanged -- the spec's prose description of "min-subtracted
-    per event" time and "log1p" charge does not match the actual shipped
-    GraphNeT behavior).
+    GraphNeT's own ParquetDataset can't read these raw files -- it expects
+    its own converted, chunked layout, not the competition's flat
+    batch_N.parquet + sensor_geometry.csv + train_meta.parquet -- so this
+    class does the geometry join and normalization itself, reusing
+    GraphNeT's real IceCubeKaggle().feature_map() (x,y,z/500,
+    time=(t-1e4)/3e4, charge=log10(q)/3 -- verified against the real
+    implementation, which differs from the spec's prose description).
 
-    Track/cascade classification labels ("pid") are NOT present in this
-    Kaggle competition's data at all -- only azimuth/zenith -- so no `pid`
-    attribute is attached to the returned Data objects. Models consuming
-    this dataset must treat classification loss as optional.
+    No `pid` (track/cascade) attribute is attached: the real competition
+    data has no such label, only azimuth/zenith.
     """
 
     FEATURE_COLUMNS = ["x", "y", "z", "time", "charge"]
@@ -92,16 +83,11 @@ class KaggleParquetDataset(Dataset):
         self._cache_order: list = []
 
     def _ordered_event_ids(self, shuffle: bool, seed: int) -> list:
-        # Deliberately NOT a global event-level shuffle: with hundreds of real
-        # batch files and only a handful cached, requesting events in fully
-        # random order means almost every __getitem__ evicts the cache and
-        # re-reads + re-groups an entire ~200k-row parquet file from disk.
-        # Order by batch_id groups instead (shuffling the group order, and
-        # optionally within each group) so a shuffled epoch still mostly hits
-        # whatever batch file is already cached. Verified this is necessary
-        # by reasoning through real Kaggle-competition scale (660 files,
-        # ~200k events each) -- the tiny synthetic test fixtures (3 files)
-        # trivially fit in cache regardless of ordering and never catch this.
+        # Not a global event-level shuffle: with hundreds of batch files and
+        # only a handful cached, fully random order would evict the cache on
+        # nearly every __getitem__. Shuffle batch-group order (and within
+        # each group) instead, so a shuffled epoch still mostly hits whatever
+        # batch file is already cached.
         rng = np.random.default_rng(seed)
         groups = self.meta.groupby("batch_id").groups
         batch_ids = list(groups.keys())

@@ -31,3 +31,16 @@ class ClassificationHead(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         return self.mlp(x)
+
+
+class MAEHead(nn.Module):
+    """Reconstructs (t, q) of masked DOMs from their node embeddings."""
+
+    def __init__(self, d: int = 256):
+        super().__init__()
+        self.proj = nn.Sequential(
+            nn.Linear(d, d // 2), nn.GELU(), nn.Linear(d // 2, 2)
+        )
+
+    def forward(self, node_embeddings: Tensor) -> Tensor:
+        return self.proj(node_embeddings)

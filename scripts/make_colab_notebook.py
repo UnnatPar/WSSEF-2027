@@ -103,9 +103,15 @@ subprocess.run(["pip", "install", "-q", "kaggle"], check=True)
 DATA_DIR = os.path.join(REPO_DIR, "data")
 train_dir = os.path.join(DATA_DIR, "train")
 
-if not os.path.exists(train_dir) or len(glob.glob(os.path.join(train_dir, "*.parquet"))) < 660:
+# Only the 116 batches configs/*.yaml actually reference (1-50 pretrain,
+# 595-660 val+test) -- ~23M events, ~20GB, not the full 660-file/118GB/130M-
+# event competition dataset, which doesn't fit on a Colab disk.
+BATCH_RANGES = "1-50 595-660"
+REQUIRED_BATCHES = 116
+
+if not os.path.exists(train_dir) or len(glob.glob(os.path.join(train_dir, "*.parquet"))) < REQUIRED_BATCHES:
     dl = subprocess.Popen(
-        ["bash", "scripts/download_data.sh", DATA_DIR],
+        ["bash", "scripts/download_data.sh", DATA_DIR, BATCH_RANGES],
         cwd=REPO_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
     )
     for line in iter(dl.stdout.readline, b""):
@@ -116,8 +122,8 @@ if not os.path.exists(train_dir) or len(glob.glob(os.path.join(train_dir, "*.par
 
 n_batches = len(glob.glob(os.path.join(train_dir, "*.parquet")))
 print(f"{n_batches} batch files ready")
-if n_batches < 660:
-    raise SystemExit(f"Expected 660 batch files, found {n_batches} -- download incomplete")
+if n_batches < REQUIRED_BATCHES:
+    raise SystemExit(f"Expected {REQUIRED_BATCHES} batch files, found {n_batches} -- download incomplete")
 """
 
 HELPERS_CELL = """\

@@ -3,13 +3,12 @@ import argparse
 import lightning as pl
 import torch
 import torch.nn.functional as F
-from lightning.pytorch.callbacks import ModelCheckpoint
-from lightning.pytorch.loggers import WandbLogger
 
+from models.heads import MAEHead
 from models.pet import PETEncoder
-from models.polarbert import MAEHead
 from train.config import flatten_sections, load_config
 from train.data import build_dataloader, build_dataset
+from train.pretrain import build_trainer
 
 
 def uniform_random_mask(n: int, ratio: float) -> torch.Tensor:
@@ -60,30 +59,6 @@ def build_model(flat_cfg) -> MAEPretrain:
     return MAEPretrain(flat_cfg)
 
 
-def build_trainer(
-    flat_cfg,
-    fast_dev_run: bool = False,
-    run_name: str = "pretrain_mae",
-    checkpoint_dirpath: str | None = None,
-    checkpoint_filename: str | None = None,
-) -> pl.Trainer:
-    kwargs = dict(
-        max_epochs=flat_cfg.epochs,
-        precision="16-mixed",
-        gradient_clip_val=flat_cfg.grad_clip,
-        callbacks=[ModelCheckpoint(
-            dirpath=checkpoint_dirpath, filename=checkpoint_filename,
-            every_n_epochs=1, save_top_k=-1,
-        )],
-    )
-    if fast_dev_run:
-        kwargs["fast_dev_run"] = True
-        kwargs["accelerator"] = "cpu"
-    else:
-        kwargs["logger"] = WandbLogger(project="neutrinojepa", name=run_name)
-    return pl.Trainer(**kwargs)
-
-
 def main(config_path: str, fast_dev_run: bool = False):
     cfg = load_config(config_path)
     flat_cfg = flatten_sections(cfg, "model", "training")
@@ -98,6 +73,7 @@ def main(config_path: str, fast_dev_run: bool = False):
     )
     trainer = build_trainer(
         flat_cfg, fast_dev_run=fast_dev_run, run_name=cfg.logging.run_name,
+        project=cfg.logging.project,
         checkpoint_dirpath=cfg.checkpoint.dirpath, checkpoint_filename=cfg.checkpoint.filename,
     )
     trainer.fit(model, loader)

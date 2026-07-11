@@ -17,6 +17,7 @@ def build_trainer(
     flat_cfg,
     fast_dev_run: bool = False,
     run_name: str = "pretrain",
+    project: str = "neutrinojepa",
     checkpoint_dirpath: str | None = None,
     checkpoint_filename: str | None = None,
 ) -> pl.Trainer:
@@ -33,7 +34,7 @@ def build_trainer(
         kwargs["fast_dev_run"] = True
         kwargs["accelerator"] = "cpu"
     else:
-        kwargs["logger"] = WandbLogger(project="neutrinojepa", name=run_name)
+        kwargs["logger"] = WandbLogger(project=project, name=run_name)
     return pl.Trainer(**kwargs)
 
 
@@ -51,6 +52,7 @@ def main(config_path: str, fast_dev_run: bool = False):
     )
     trainer = build_trainer(
         flat_cfg, fast_dev_run=fast_dev_run, run_name=cfg.logging.run_name,
+        project=cfg.logging.project,
         checkpoint_dirpath=cfg.checkpoint.dirpath, checkpoint_filename=cfg.checkpoint.filename,
     )
     trainer.fit(model, loader)

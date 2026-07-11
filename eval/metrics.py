@@ -1,7 +1,7 @@
 import torch
 
 
-def _to_cartesian(az: torch.Tensor, zen: torch.Tensor) -> torch.Tensor:
+def to_cartesian(az: torch.Tensor, zen: torch.Tensor) -> torch.Tensor:
     return torch.stack([
         torch.sin(zen) * torch.cos(az),
         torch.sin(zen) * torch.sin(az),
@@ -11,7 +11,7 @@ def _to_cartesian(az: torch.Tensor, zen: torch.Tensor) -> torch.Tensor:
 
 def mean_angular_error(pred_az, pred_zen, true_az, true_zen) -> float:
     """Great-circle distance in degrees. Identical to the Kaggle metric."""
-    dot = (_to_cartesian(pred_az, pred_zen) * _to_cartesian(true_az, true_zen)).sum(-1)
+    dot = (to_cartesian(pred_az, pred_zen) * to_cartesian(true_az, true_zen)).sum(-1)
     dot = dot.clamp(-1 + 1e-7, 1 - 1e-7)
     return torch.acos(dot).mean().item() * 180 / torch.pi
 

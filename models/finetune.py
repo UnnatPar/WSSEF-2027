@@ -4,17 +4,9 @@ import torch.nn.functional as F
 from graphnet.training.loss_functions import VonMisesFisher3DLoss
 from torch import nn
 
-from eval.metrics import mean_angular_error
+from eval.metrics import mean_angular_error, to_cartesian
 from models.heads import ClassificationHead, DirectionHead
 from models.pet import PETEncoder
-
-
-def _to_cartesian(az: torch.Tensor, zen: torch.Tensor) -> torch.Tensor:
-    return torch.stack([
-        torch.sin(zen) * torch.cos(az),
-        torch.sin(zen) * torch.sin(az),
-        torch.cos(zen),
-    ], dim=-1)
 
 
 class SupervisedFineTune(pl.LightningModule):
@@ -55,9 +47,9 @@ class SupervisedFineTune(pl.LightningModule):
         return g, az, zen, kappa
 
     def _compute_loss(self, batch, g, az, zen, kappa):
-        pred_vec = _to_cartesian(az, zen)
+        pred_vec = to_cartesian(az, zen)
         pred = torch.cat([pred_vec, kappa], dim=-1)
-        true_vec = _to_cartesian(batch.azimuth, batch.zenith)
+        true_vec = to_cartesian(batch.azimuth, batch.zenith)
 
         direction_loss = self.direction_loss_fn(pred, true_vec)
         loss = self.cfg.lambda_direction * direction_loss
