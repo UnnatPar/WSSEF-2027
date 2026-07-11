@@ -10,7 +10,6 @@ pipeline doesn't produce. That needs a separate sweep script.
 """
 
 import argparse
-import glob
 import os
 
 import pandas as pd
@@ -27,21 +26,10 @@ from eval.plots import (
 )
 from eval.tables import build_summary_table, save_summary_table
 from models.finetune import load_full_checkpoint
+from train.checkpoints import latest_checkpoint
 from train.config import flatten_sections, load_config
 from train.data import build_dataloader, build_dataset
 from train.pretrain_mae import uniform_random_mask
-
-
-def latest_checkpoint(dirpath: str) -> str:
-    files = glob.glob(os.path.join(dirpath, "*.ckpt"))
-    if not files:
-        raise FileNotFoundError(f"no checkpoints found in {dirpath}")
-
-    def epoch_num(path: str) -> int:
-        digits = "".join(c for c in os.path.basename(path) if c.isdigit())
-        return int(digits) if digits else -1
-
-    return max(files, key=epoch_num)
 
 
 @torch.no_grad()

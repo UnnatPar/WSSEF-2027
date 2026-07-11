@@ -1,5 +1,5 @@
 model:
-  checkpoint: checkpoints/pretrain_mae_v1/epoch99.ckpt
+  checkpoint: checkpoints/pretrain_mae_v1/  # resolved to the latest available *.ckpt at runtime, not hardcoded to a specific epoch
   freeze_encoder: false
   d: 256
   L: 6

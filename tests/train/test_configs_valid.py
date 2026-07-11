@@ -86,6 +86,18 @@ def test_probe_and_finetune_configs_point_at_the_right_pretrain_checkpoint():
         assert mae_source in cfg.model.checkpoint, f"{name} should point at a {mae_source} checkpoint"
 
 
+def test_probe_and_finetune_configs_reference_a_directory_not_a_hardcoded_epoch():
+    # A hardcoded "epoch99.ckpt" would not exist if a real Colab run got
+    # interrupted before reaching that epoch -- train/checkpoints.py resolves
+    # the latest available checkpoint in this directory at runtime instead.
+    for name in ["probe_jepa.yaml", "probe_mae.yaml", "finetune_jepa.yaml", "finetune_mae.yaml"]:
+        cfg = load_config(f"configs/{name}")
+        assert cfg.model.checkpoint.endswith("/"), (
+            f"{name}'s model.checkpoint should be a directory, not a specific epoch file"
+        )
+        assert ".ckpt" not in cfg.model.checkpoint
+
+
 def test_all_supervised_and_pretrain_configs_have_distinct_checkpoint_dirs():
     # This is the exact bug this config split fixes: jepa-probe and mae-probe
     # (and jepa-finetune / mae-finetune) used to share a checkpoint.dirpath

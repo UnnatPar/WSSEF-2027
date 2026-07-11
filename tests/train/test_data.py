@@ -181,6 +181,21 @@ def test_build_dataloader_uses_spawn_context_when_multiprocessing(
     assert type(loader.multiprocessing_context).__name__ == "SpawnContext"
 
 
+def test_build_dataloader_uses_persistent_workers_when_multiprocessing(
+    tiny_batch_dir, tiny_sensor_geometry_csv, tiny_meta_parquet
+):
+    # Without this, PyTorch respawns every worker at the end of each epoch
+    # (the default) -- measured at ~13s per spawned worker just to
+    # re-import torch/lightning/graphnet from scratch, since spawn (unlike
+    # fork) doesn't inherit already-loaded modules.
+    dataset = build_dataset(
+        str(tiny_batch_dir), str(tiny_sensor_geometry_csv), str(tiny_meta_parquet), [1, 3],
+    )
+    loader = build_dataloader(dataset, batch_size=4, num_workers=2)
+    assert loader.persistent_workers is True
+    assert loader.pin_memory is True
+
+
 def test_build_dataloader_no_multiprocessing_context_when_single_process(
     tiny_batch_dir, tiny_sensor_geometry_csv, tiny_meta_parquet
 ):

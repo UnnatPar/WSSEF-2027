@@ -5,6 +5,7 @@ from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
 from lightning.pytorch.loggers import CSVLogger, WandbLogger
 
 from models.finetune import SupervisedFineTune, build_supervised_model
+from train.checkpoints import latest_checkpoint
 from train.config import flatten_sections, load_config
 from train.data import build_dataloader, build_dataset
 
@@ -17,7 +18,12 @@ def main(config_path: str, fast_dev_run: bool = False):
     cfg = load_config(config_path)
     flat_cfg = flatten_sections(cfg, "model", "training")
 
-    checkpoint_path = getattr(cfg.model, "checkpoint", None)
+    # cfg.model.checkpoint (when present) is a directory, resolved to
+    # whatever epoch actually finished -- not a hardcoded filename, which
+    # would break if pretraining was interrupted early. Absent entirely for
+    # the from-scratch experiment (configs/scratch.yaml).
+    checkpoint_dir = getattr(cfg.model, "checkpoint", None)
+    checkpoint_path = latest_checkpoint(checkpoint_dir) if checkpoint_dir is not None else None
     model = build_finetune_model(flat_cfg, checkpoint_path)
 
     num_workers = getattr(flat_cfg, "num_workers", 0)

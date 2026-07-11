@@ -178,4 +178,13 @@ def build_dataloader(dataset, batch_size: int, num_workers: int = 0) -> DataLoad
         # GraphNeT's own ParquetDataset docstring warns about exactly this
         # for the same reason (also pandas/pyarrow-based).
         kwargs["multiprocessing_context"] = "spawn"
+        # Without this, PyTorch tears down and respawns every worker at the
+        # end of each epoch (the default). Verified by direct measurement:
+        # a single spawned worker takes ~13s just to re-import
+        # torch/lightning/graphnet from scratch (spawn doesn't inherit
+        # already-loaded modules the way fork does) -- across num_workers=8
+        # and 100 pretrain epochs that's potentially hours of pure respawn
+        # overhead for zero benefit.
+        kwargs["persistent_workers"] = True
+        kwargs["pin_memory"] = True
     return DataLoader(dataset, **kwargs)
