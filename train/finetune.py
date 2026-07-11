@@ -20,16 +20,17 @@ def main(config_path: str, fast_dev_run: bool = False):
     checkpoint_path = getattr(cfg.model, "checkpoint", None)
     model = build_finetune_model(flat_cfg, checkpoint_path)
 
+    num_workers = getattr(flat_cfg, "num_workers", 0)
     train_dataset = build_dataset(
         cfg.data.batch_dir, cfg.data.geometry_path, cfg.data.meta_path,
-        cfg.data.train_batches, cfg.data.max_pulses,
+        cfg.data.train_batches, cfg.data.max_pulses, shuffle=True,
     )
     val_dataset = build_dataset(
         cfg.data.batch_dir, cfg.data.geometry_path, cfg.data.meta_path,
         cfg.data.val_batches, cfg.data.max_pulses,
     )
-    train_loader = build_dataloader(train_dataset, batch_size=flat_cfg.batch_size, shuffle=True)
-    val_loader = build_dataloader(val_dataset, batch_size=flat_cfg.batch_size, shuffle=False)
+    train_loader = build_dataloader(train_dataset, batch_size=flat_cfg.batch_size, num_workers=num_workers)
+    val_loader = build_dataloader(val_dataset, batch_size=flat_cfg.batch_size, num_workers=num_workers)
 
     early_stop = EarlyStopping(
         monitor="val/angular_error",

@@ -100,6 +100,19 @@ def test_notebook_runs_eval_report_after_all_experiments():
     assert "shutil.copytree" in report_source  # syncs the report dir to Drive
 
 
+def test_notebook_watcher_does_not_let_drive_sync_errors_kill_the_thread():
+    # An unhandled OSError (e.g. Drive quota exhausted) inside the daemon
+    # watcher thread would silently kill it -- checkpoint syncing stops for
+    # the rest of that stage with no visible error to the user.
+    source = "\n".join(cell["source"] for cell in build_notebook()["cells"])
+    copy_idx = source.index("shutil.copy2(path, drive_dst)")
+    try_idx = source.rindex("try:", 0, copy_idx)
+    except_idx = source.index("except OSError", copy_idx)
+    assert try_idx < copy_idx < except_idx, (
+        "shutil.copy2 in the watcher must be inside a try/except OSError"
+    )
+
+
 def test_main_writes_a_loadable_notebook_file(tmp_path):
     from scripts.make_colab_notebook import main
 

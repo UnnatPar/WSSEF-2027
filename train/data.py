@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import torch
 from graphnet.models.detector.icecube import IceCubeKaggle
@@ -72,7 +73,9 @@ class KaggleParquetDataset(Dataset):
         geometry_path: str,
         meta_path: str,
         batch_range: list[int],
-        cache_size: int = 2,
+        cache_size: int = 4,
+        shuffle: bool = False,
+        seed: int = 0,
     ):
         self.batch_dir = Path(batch_dir)
         self.geometry = pd.read_csv(geometry_path).set_index("sensor_id")
@@ -82,11 +85,35 @@ class KaggleParquetDataset(Dataset):
         start, end = batch_range
         meta = meta[(meta["batch_id"] >= start) & (meta["batch_id"] <= end)]
         self.meta = meta.set_index("event_id")
-        self.event_ids = list(self.meta.index)
+        self.event_ids = self._ordered_event_ids(shuffle, seed)
 
         self._cache_size = cache_size
         self._cache: dict = {}
         self._cache_order: list = []
+
+    def _ordered_event_ids(self, shuffle: bool, seed: int) -> list:
+        # Deliberately NOT a global event-level shuffle: with hundreds of real
+        # batch files and only a handful cached, requesting events in fully
+        # random order means almost every __getitem__ evicts the cache and
+        # re-reads + re-groups an entire ~200k-row parquet file from disk.
+        # Order by batch_id groups instead (shuffling the group order, and
+        # optionally within each group) so a shuffled epoch still mostly hits
+        # whatever batch file is already cached. Verified this is necessary
+        # by reasoning through real Kaggle-competition scale (660 files,
+        # ~200k events each) -- the tiny synthetic test fixtures (3 files)
+        # trivially fit in cache regardless of ordering and never catch this.
+        rng = np.random.default_rng(seed)
+        groups = self.meta.groupby("batch_id").groups
+        batch_ids = list(groups.keys())
+        if shuffle:
+            rng.shuffle(batch_ids)
+        event_ids = []
+        for batch_id in batch_ids:
+            ids = list(groups[batch_id])
+            if shuffle:
+                rng.shuffle(ids)
+            event_ids.extend(ids)
+        return event_ids
 
     def __len__(self) -> int:
         return len(self.event_ids)
@@ -127,14 +154,28 @@ def build_dataset(
     meta_path: str,
     batch_range: list[int],
     max_pulses: int | None = None,
+    shuffle: bool = False,
+    seed: int = 0,
 ):
-    dataset = KaggleParquetDataset(batch_dir, geometry_path, meta_path, batch_range)
+    dataset = KaggleParquetDataset(
+        batch_dir, geometry_path, meta_path, batch_range, shuffle=shuffle, seed=seed,
+    )
     if max_pulses is not None:
         return MaxPulsesDataset(dataset, max_pulses)
     return dataset
 
 
-def build_dataloader(
-    dataset, batch_size: int, num_workers: int = 0, shuffle: bool = True
-) -> DataLoader:
-    return DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, shuffle=shuffle)
+def build_dataloader(dataset, batch_size: int, num_workers: int = 0) -> DataLoader:
+    # No `shuffle` parameter here on purpose: PyTorch's own row-level shuffle
+    # would silently undo build_dataset(..., shuffle=True)'s cache-friendly
+    # batch-locality ordering (see KaggleParquetDataset._ordered_event_ids).
+    # Any epoch-level shuffling must happen via that flag, at construction
+    # time, not here.
+    kwargs = dict(batch_size=batch_size, num_workers=num_workers, shuffle=False)
+    if num_workers > 0:
+        # pandas/pyarrow's parquet reader is not fork-safe -- a worker forked
+        # while pyarrow holds an internal thread-pool mutex can hang forever.
+        # GraphNeT's own ParquetDataset docstring warns about exactly this
+        # for the same reason (also pandas/pyarrow-based).
+        kwargs["multiprocessing_context"] = "spawn"
+    return DataLoader(dataset, **kwargs)

@@ -120,7 +120,7 @@ def test_real_kaggle_schema_pipeline_end_to_end(
         str(tiny_batch_dir), str(tiny_sensor_geometry_csv), str(tiny_meta_parquet),
         [1, 3], max_pulses=256,
     )
-    loader = build_dataloader(dataset, batch_size=4, shuffle=False)
+    loader = build_dataloader(dataset, batch_size=4)
 
     jepa_cfg = make_jepa_cfg()
     model = build_jepa_model(jepa_cfg)

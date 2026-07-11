@@ -145,8 +145,18 @@ def run_stage(script, config, watch_dir=None):
                 except OSError:
                     continue
                 drive_dst = os.path.join(DRIVE_CHECKPOINT_DIR, os.path.basename(watch_dir), os.path.basename(path))
-                os.makedirs(os.path.dirname(drive_dst), exist_ok=True)
-                shutil.copy2(path, drive_dst)
+                try:
+                    os.makedirs(os.path.dirname(drive_dst), exist_ok=True)
+                    shutil.copy2(path, drive_dst)
+                except OSError as e:
+                    # An unhandled exception here would silently kill this
+                    # daemon thread (e.g. Drive quota exhausted mid-run) --
+                    # checkpoint syncing would stop for the rest of this
+                    # stage with no visible error. Log and retry next poll
+                    # instead of leaving `path` unmarked-but-silently-lost.
+                    print(f"=== CHECKPOINT SYNC FAILED for {os.path.basename(path)}: {e!r} "
+                          f"(will retry) ===", flush=True)
+                    continue
                 _seen.add(path)
                 print(f"=== CHECKPOINT SYNCED: {os.path.basename(path)} -> Drive ===", flush=True)
             _stop.wait(30)

@@ -38,8 +38,24 @@ def test_supervised_configs_flatten_to_required_fields():
         cfg = load_config(f"configs/{name}")
         flat = flatten_sections(cfg, "model", "training")
         for field in ["d", "L", "k", "freeze_encoder", "lr_encoder", "lr_heads",
-                      "weight_decay", "lambda_direction", "lambda_classification"]:
+                      "weight_decay", "lambda_direction", "lambda_classification",
+                      "num_workers"]:
             assert hasattr(flat, field), f"{name} missing {field}"
+
+
+def test_supervised_configs_do_not_use_the_full_594_batch_train_pool():
+    # Real scale: 660 files, ~200k events/batch, ~130M total (per spec). The
+    # full [1, 594] train-pool range would try to index ~117M events and
+    # thrash KaggleParquetDataset's file cache -- the spec's own guidance is
+    # "use 5M = ~25 batches" for fine-tuning, not the entire pool.
+    for name in SUPERVISED_CONFIGS:
+        cfg = load_config(f"configs/{name}")
+        start, end = cfg.data.train_batches
+        n_batches = end - start + 1
+        assert n_batches <= 50, (
+            f"{name}'s train_batches spans {n_batches} batches -- "
+            "did this regress back to the full [1, 594] pool?"
+        )
 
 
 def test_scratch_config_has_no_checkpoint():

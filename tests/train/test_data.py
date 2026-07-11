@@ -3,6 +3,7 @@ from pathlib import Path
 import torch
 
 from train.data import (
+    KaggleParquetDataset,
     MaxPulsesDataset,
     batch_file_paths,
     build_dataloader,
@@ -100,7 +101,91 @@ def test_build_dataloader_batches_events(
         str(tiny_batch_dir), str(tiny_sensor_geometry_csv), str(tiny_meta_parquet),
         [1, 3], max_pulses=256,
     )
-    loader = build_dataloader(dataset, batch_size=4, shuffle=False)
+    loader = build_dataloader(dataset, batch_size=4)
     batch = next(iter(loader))
     assert batch.x.shape[1] == 6
     assert batch.batch.max().item() <= 3  # up to 4 events (indices 0-3) in the batch
+
+
+def test_unshuffled_event_order_is_grouped_by_batch_id(
+    tiny_batch_dir, tiny_sensor_geometry_csv, tiny_meta_parquet
+):
+    dataset = KaggleParquetDataset(
+        str(tiny_batch_dir), str(tiny_sensor_geometry_csv), str(tiny_meta_parquet), [1, 3],
+    )
+    batch_ids_in_order = [int(dataset.meta.loc[eid, "batch_id"]) for eid in dataset.event_ids]
+    # Consecutive events must come from the same batch file except exactly
+    # at the n_batches-1 boundaries between groups -- this is what keeps the
+    # LRU file cache from thrashing at real (hundreds-of-files) scale.
+    same_batch_transitions = sum(
+        1 for a, b in zip(batch_ids_in_order, batch_ids_in_order[1:]) if a == b
+    )
+    n_batches = len(set(batch_ids_in_order))
+    assert same_batch_transitions == len(batch_ids_in_order) - n_batches
+
+
+def test_shuffled_event_order_still_groups_by_batch_id(
+    tiny_batch_dir, tiny_sensor_geometry_csv, tiny_meta_parquet
+):
+    dataset = KaggleParquetDataset(
+        str(tiny_batch_dir), str(tiny_sensor_geometry_csv), str(tiny_meta_parquet), [1, 3],
+        shuffle=True, seed=1,
+    )
+    batch_ids_in_order = [int(dataset.meta.loc[eid, "batch_id"]) for eid in dataset.event_ids]
+    # A truly global shuffle across all events would make same-batch
+    # transitions rare (~1/n_batches chance per transition). Grouped-shuffle
+    # keeps whole batches contiguous, so almost every transition should
+    # still stay within the same batch.
+    same_batch_transitions = sum(
+        1 for a, b in zip(batch_ids_in_order, batch_ids_in_order[1:]) if a == b
+    )
+    n_batches = len(set(batch_ids_in_order))
+    assert same_batch_transitions >= len(batch_ids_in_order) - n_batches
+
+
+def test_shuffled_and_unshuffled_orderings_contain_the_same_events(
+    tiny_batch_dir, tiny_sensor_geometry_csv, tiny_meta_parquet
+):
+    unshuffled = KaggleParquetDataset(
+        str(tiny_batch_dir), str(tiny_sensor_geometry_csv), str(tiny_meta_parquet), [1, 3],
+    )
+    shuffled = KaggleParquetDataset(
+        str(tiny_batch_dir), str(tiny_sensor_geometry_csv), str(tiny_meta_parquet), [1, 3],
+        shuffle=True, seed=2,
+    )
+    assert sorted(unshuffled.event_ids) == sorted(shuffled.event_ids)
+
+
+def test_build_dataset_shuffle_flag_reaches_the_underlying_dataset(
+    tiny_batch_dir, tiny_sensor_geometry_csv, tiny_meta_parquet
+):
+    dataset = build_dataset(
+        str(tiny_batch_dir), str(tiny_sensor_geometry_csv), str(tiny_meta_parquet),
+        [1, 3], max_pulses=256, shuffle=True, seed=3,
+    )
+    # build_dataset wraps in MaxPulsesDataset when max_pulses is set
+    assert isinstance(dataset, MaxPulsesDataset)
+    assert isinstance(dataset.dataset, KaggleParquetDataset)
+
+
+def test_build_dataloader_uses_spawn_context_when_multiprocessing(
+    tiny_batch_dir, tiny_sensor_geometry_csv, tiny_meta_parquet
+):
+    # pandas/pyarrow's parquet reader is not fork-safe; a worker forked
+    # while pyarrow holds an internal thread-pool mutex can hang forever.
+    dataset = build_dataset(
+        str(tiny_batch_dir), str(tiny_sensor_geometry_csv), str(tiny_meta_parquet), [1, 3],
+    )
+    loader = build_dataloader(dataset, batch_size=4, num_workers=2)
+    assert loader.multiprocessing_context is not None
+    assert type(loader.multiprocessing_context).__name__ == "SpawnContext"
+
+
+def test_build_dataloader_no_multiprocessing_context_when_single_process(
+    tiny_batch_dir, tiny_sensor_geometry_csv, tiny_meta_parquet
+):
+    dataset = build_dataset(
+        str(tiny_batch_dir), str(tiny_sensor_geometry_csv), str(tiny_meta_parquet), [1, 3],
+    )
+    loader = build_dataloader(dataset, batch_size=4, num_workers=0)
+    assert loader.multiprocessing_context is None

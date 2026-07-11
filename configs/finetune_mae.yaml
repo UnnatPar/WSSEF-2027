@@ -12,6 +12,7 @@ training:
   weight_decay: 0.05
   epochs: 50
   grad_clip: 1.0
+  num_workers: 4
   lambda_direction: 1.0
   lambda_classification: 0.5
   early_stopping_patience: 5
@@ -21,7 +22,7 @@ data:
   batch_dir: data/train/
   meta_path: data/train_meta.parquet
   geometry_path: data/sensor_geometry.csv
-  train_batches: [1, 594]
+  train_batches: [1, 25]  # spec: "use 5M = ~25 batches" -- NOT the full 594-batch train pool, which would try to index ~117M events and thrash the file cache
   val_batches: [595, 627]
   test_batches: [628, 660]
 

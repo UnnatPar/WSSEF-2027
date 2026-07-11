@@ -44,10 +44,10 @@ def main(config_path: str, fast_dev_run: bool = False):
     model = build_model(flat_cfg)
     dataset = build_dataset(
         cfg.data.batch_dir, cfg.data.geometry_path, cfg.data.meta_path,
-        cfg.data.train_batches, cfg.data.max_pulses,
+        cfg.data.train_batches, cfg.data.max_pulses, shuffle=True,
     )
     loader = build_dataloader(
-        dataset, batch_size=flat_cfg.batch_size, num_workers=flat_cfg.num_workers, shuffle=True,
+        dataset, batch_size=flat_cfg.batch_size, num_workers=flat_cfg.num_workers,
     )
     trainer = build_trainer(
         flat_cfg, fast_dev_run=fast_dev_run, run_name=cfg.logging.run_name,

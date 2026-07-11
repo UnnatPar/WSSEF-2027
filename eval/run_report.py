@@ -105,7 +105,7 @@ def run_report(
     os.makedirs(output_dir, exist_ok=True)
 
     dataset = build_dataset(batch_dir, geometry_path, meta_path, test_batches, max_pulses)
-    loader = build_dataloader(dataset, batch_size=batch_size, shuffle=False)
+    loader = build_dataloader(dataset, batch_size=batch_size)
 
     evaluations = {}
     for name, ckpt_dir in checkpoint_dirs.items():
