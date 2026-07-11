@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import torch
 from torch_geometric.data import Batch, Data
 
-from models.finetune import SupervisedFineTune, build_supervised_model
+from models.finetune import SupervisedFineTune, build_supervised_model, load_full_checkpoint
 from models.jepa import NeutrinoJEPA
 
 
@@ -98,6 +98,23 @@ def test_build_supervised_model_loads_encoder_weights_from_jepa_checkpoint(tmp_p
     ):
         assert torch.equal(jepa_param, loaded_param)
     assert all(not p.requires_grad for p in supervised_model.encoder.parameters())
+
+
+def test_load_full_checkpoint_restores_heads_not_just_encoder(tmp_path):
+    trained = SupervisedFineTune(make_cfg())
+    with torch.no_grad():
+        for p in trained.direction_head.parameters():
+            p.add_(1.0)  # simulate training having moved the head weights
+    ckpt_path = tmp_path / "finetune_ckpt.pt"
+    torch.save({"state_dict": trained.state_dict()}, ckpt_path)
+
+    loaded = load_full_checkpoint(make_cfg(), str(ckpt_path))
+
+    for trained_p, loaded_p in zip(trained.direction_head.parameters(), loaded.direction_head.parameters()):
+        assert torch.equal(trained_p, loaded_p)
+    for trained_p, loaded_p in zip(trained.encoder.parameters(), loaded.encoder.parameters()):
+        assert torch.equal(trained_p, loaded_p)
+    assert not loaded.training
 
 
 def test_validation_step_logs_val_angular_error():

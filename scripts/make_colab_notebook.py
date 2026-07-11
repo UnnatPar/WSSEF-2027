@@ -24,6 +24,10 @@ not reimplement any training logic):
 2. **NeutrinoJEPAPET**: `train/pretrain.py` -> `train/probe.py` -> `train/finetune.py`
 3. **PET+heads from scratch**: `train/finetune.py` on `configs/scratch.yaml` directly
 
+Then evaluates all 5 resulting checkpoints (`jepa_probe`, `jepa_finetune`,
+`mae_probe`, `mae_finetune`, `scratch`) via `eval/run_report.py`, producing
+the 6 poster figures + summary table under `report/`, synced to Drive.
+
 Requires a Kaggle API token in Colab secrets as `KAGGLE_USERNAME` / `KAGGLE_KEY`.
 """
 
@@ -196,6 +200,34 @@ print("Final checkpoint directories: jepa_probe_v1, jepa_finetune_v1,")
 print("mae_probe_v1, mae_finetune_v1, scratch_v1")
 """
 
+REPORT_CELL = """\
+# -- Evaluation: turn the 5 checkpoints into the 6 poster figures + table --
+# All the actual eval logic (inference, metrics, plotting) lives in
+# eval/run_report.py -- this cell only runs it and syncs the output to Drive.
+# Not run_stage(): this is a one-shot batch job, not an incremental training
+# run, so there's no checkpoint directory to watch -- and its CLI takes
+# different flags (--checkpoints-dir/--data-config/--output-dir, not --config).
+REPORT_DIR = os.path.join(REPO_DIR, "report")
+report_proc = subprocess.Popen(
+    ["python", "-u", "eval/run_report.py",
+     "--checkpoints-dir", "checkpoints",
+     "--data-config", "configs/finetune_jepa.yaml",
+     "--output-dir", "report"],
+    cwd=REPO_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+)
+for line in iter(report_proc.stdout.readline, b""):
+    sys.stdout.write(line.decode(errors="replace")); sys.stdout.flush()
+report_proc.wait()
+if report_proc.returncode != 0:
+    raise SystemExit(f"eval/run_report.py failed with code {report_proc.returncode}")
+
+drive_report_dir = os.path.join(DRIVE_CHECKPOINT_DIR, "report")
+shutil.copytree(REPORT_DIR, drive_report_dir, dirs_exist_ok=True)
+print(f"Report synced to {drive_report_dir}")
+for fname in sorted(os.listdir(REPORT_DIR)):
+    print(" -", fname)
+"""
+
 
 def build_notebook() -> nbf.NotebookNode:
     nb = nbf.v4.new_notebook()
@@ -211,6 +243,7 @@ def build_notebook() -> nbf.NotebookNode:
         nbf.v4.new_code_cell(EXPERIMENT_2_CELL),
         nbf.v4.new_code_cell(EXPERIMENT_1_CELL),
         nbf.v4.new_code_cell(EXPERIMENT_3_CELL),
+        nbf.v4.new_code_cell(REPORT_CELL),
     ]
     return nb
 

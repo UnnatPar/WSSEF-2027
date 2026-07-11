@@ -2,7 +2,7 @@ import argparse
 
 import lightning as pl
 from lightning.pytorch.callbacks import ModelCheckpoint
-from lightning.pytorch.loggers import WandbLogger
+from lightning.pytorch.loggers import CSVLogger, WandbLogger
 
 from models.finetune import SupervisedFineTune, build_supervised_model
 from train.config import flatten_sections, load_config
@@ -41,7 +41,10 @@ def main(config_path: str, fast_dev_run: bool = False):
         kwargs["fast_dev_run"] = True
         kwargs["accelerator"] = "cpu"
     else:
-        kwargs["logger"] = WandbLogger(project="neutrinojepa", name=cfg.logging.run_name)
+        kwargs["logger"] = [
+            WandbLogger(project="neutrinojepa", name=cfg.logging.run_name),
+            CSVLogger(save_dir=cfg.checkpoint.dirpath, name="", version=""),
+        ]
     trainer = pl.Trainer(**kwargs)
     trainer.fit(model, train_loader, val_loader)
     return trainer

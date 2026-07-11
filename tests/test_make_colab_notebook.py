@@ -10,7 +10,7 @@ def test_notebook_is_valid_nbformat():
 
 def test_notebook_has_expected_cell_count():
     nb = build_notebook()
-    assert len(nb["cells"]) == 11
+    assert len(nb["cells"]) == 12
 
 
 def test_notebook_never_reimplements_training_logic():
@@ -24,6 +24,8 @@ def test_notebook_never_reimplements_training_logic():
     forbidden_substrings = [
         "PETEncoder", "NeutrinoJEPA(", "SupervisedFineTune", "MAEPretrain",
         "spatial_cluster_mask", "VonMisesFisher", "ParquetDataset",
+        "plot_angular_error_vs_energy", "plot_method_comparison_bars",
+        "plot_embedding_projection", "plot_masking_comparison", "TSNE",
     ]
     for forbidden in forbidden_substrings:
         assert forbidden not in code_source, (
@@ -84,6 +86,20 @@ def test_notebook_covers_all_3_experiments():
     assert "Experiment 3" in source
 
 
+def test_notebook_runs_eval_report_after_all_experiments():
+    cells = build_notebook()["cells"]
+    sources = [c["source"] for c in cells if c["cell_type"] == "code"]
+
+    exp3_idx = next(i for i, s in enumerate(sources) if "Experiment 3" in s)
+    report_idx = next(i for i, s in enumerate(sources) if "eval/run_report.py" in s)
+    assert report_idx > exp3_idx, "eval/run_report.py must run after all 3 experiments"
+
+    report_source = sources[report_idx]
+    assert "--checkpoints-dir" in report_source
+    assert "--output-dir" in report_source
+    assert "shutil.copytree" in report_source  # syncs the report dir to Drive
+
+
 def test_main_writes_a_loadable_notebook_file(tmp_path):
     from scripts.make_colab_notebook import main
 
@@ -94,4 +110,4 @@ def test_main_writes_a_loadable_notebook_file(tmp_path):
     with open(out_path) as f:
         loaded = nbf.read(f, as_version=4)
     nbf.validate(loaded)
-    assert len(loaded["cells"]) == 11
+    assert len(loaded["cells"]) == 12

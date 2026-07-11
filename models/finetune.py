@@ -102,6 +102,19 @@ class SupervisedFineTune(pl.LightningModule):
         ], weight_decay=self.cfg.weight_decay)
 
 
+def load_full_checkpoint(cfg, checkpoint_path: str) -> SupervisedFineTune:
+    """Loads a complete, already-trained probe/finetune checkpoint (encoder
+    AND heads) for evaluation. Unlike build_supervised_model, which only
+    transplants encoder weights onto freshly-initialized heads to START a
+    new probe/finetune run, this restores everything -- used by
+    eval/run_report.py to actually score a finished model."""
+    model = SupervisedFineTune(cfg)
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    model.load_state_dict(checkpoint["state_dict"])
+    model.eval()
+    return model
+
+
 def build_supervised_model(cfg, checkpoint_path: str | None) -> SupervisedFineTune:
     model = SupervisedFineTune(cfg)
     if checkpoint_path is not None:
