@@ -41,9 +41,25 @@ def test_notebook_references_every_stage_script_and_config():
         assert script in source, f"missing reference to {script}"
     for config in [
         "configs/pretrain.yaml", "configs/pretrain_mae.yaml",
-        "configs/probe.yaml", "configs/finetune.yaml", "configs/scratch.yaml",
+        "configs/probe_jepa.yaml", "configs/probe_mae.yaml",
+        "configs/finetune_jepa.yaml", "configs/finetune_mae.yaml",
+        "configs/scratch.yaml",
     ]:
         assert config in source, f"missing reference to {config}"
+
+
+def test_notebook_gives_each_experiment_stage_a_distinct_checkpoint_dir():
+    # This is the exact bug the config split fixed: jepa-probe and mae-probe
+    # (and jepa/mae-finetune) must never share a watch_dir/checkpoint folder,
+    # or one experiment's checkpoints silently overwrite the other's.
+    source = "\n".join(cell["source"] for cell in build_notebook()["cells"])
+    for watch_dir in [
+        "checkpoints/pretrain_jepa_v1", "checkpoints/pretrain_mae_v1",
+        "checkpoints/jepa_probe_v1", "checkpoints/mae_probe_v1",
+        "checkpoints/jepa_finetune_v1", "checkpoints/mae_finetune_v1",
+        "checkpoints/scratch_v1",
+    ]:
+        assert watch_dir in source, f"missing distinct checkpoint dir {watch_dir}"
 
 
 def test_notebook_installs_torch_last_after_requirements():

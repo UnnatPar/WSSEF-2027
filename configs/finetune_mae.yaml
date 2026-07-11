@@ -1,19 +1,20 @@
 model:
-  checkpoint: checkpoints/pretrain_jepa_v1/epoch99.ckpt  # point at pretrain_mae_v1 for experiment 1 instead
-  freeze_encoder: true
+  checkpoint: checkpoints/pretrain_mae_v1/epoch99.ckpt
+  freeze_encoder: false
   d: 256
   L: 6
   k: 8
 
 training:
   batch_size: 256
-  lr_encoder: 0.0  # unused when frozen, kept for schema symmetry with finetune.yaml
+  lr_encoder: 1.0e-4
   lr_heads: 1.0e-3
   weight_decay: 0.05
-  epochs: 30
+  epochs: 50
   grad_clip: 1.0
   lambda_direction: 1.0
   lambda_classification: 0.5
+  early_stopping_patience: 5
 
 data:
   max_pulses: 256
@@ -26,8 +27,8 @@ data:
 
 logging:
   project: neutrinojepa
-  run_name: probe_v1
+  run_name: mae_finetune_v1
 
 checkpoint:
-  dirpath: checkpoints/probe_v1/
+  dirpath: checkpoints/mae_finetune_v1/
   filename: "epoch{epoch}"

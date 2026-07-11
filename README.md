@@ -22,16 +22,21 @@ implementation steps.
 
     # Experiment 1: NeutrinoPET (MAE pre-training)
     python train/pretrain_mae.py --config configs/pretrain_mae.yaml
-    python train/probe.py --config configs/probe.yaml
-    python train/finetune.py --config configs/finetune.yaml
+    python train/probe.py --config configs/probe_mae.yaml
+    python train/finetune.py --config configs/finetune_mae.yaml
 
     # Experiment 2: NeutrinoJEPAPET (JEPA pre-training)
     python train/pretrain.py --config configs/pretrain.yaml
-    python train/probe.py --config configs/probe.yaml
-    python train/finetune.py --config configs/finetune.yaml
+    python train/probe.py --config configs/probe_jepa.yaml
+    python train/finetune.py --config configs/finetune_jepa.yaml
 
     # Experiment 3: PET+heads from scratch
     python train/finetune.py --config configs/scratch.yaml
+
+Each stage has its own `checkpoint.dirpath` — the 5 final checkpoint
+directories you end up with are `jepa_probe_v1`, `jepa_finetune_v1`,
+`mae_probe_v1`, `mae_finetune_v1`, and `scratch_v1` (there's no
+"scratch-probe": with no pretrained encoder there's nothing to freeze).
 
 ## Run on Colab
 

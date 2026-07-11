@@ -39,7 +39,7 @@ INSTALL_CELL = """\
 # on torch and will silently upgrade it past the pin if installed afterward
 # (verified by direct testing while building this repo) -- torch/PyG are
 # installed LAST, after requirements.txt, to guarantee the pinned versions win.
-import subprocess, os, sys, re, threading, shutil, glob, time
+import subprocess, os, sys, threading, shutil, glob, time
 
 subprocess.run(
     ["pip", "install", "-q", "torch==2.3.0", "--index-url", "https://download.pytorch.org/whl/cu121"],
@@ -117,7 +117,7 @@ if n_batches < 660:
 """
 
 HELPERS_CELL = """\
-# -- Shared helpers: run a training stage, and patch a config's checkpoint --
+# -- Shared helper: run a training stage, syncing new checkpoints to Drive --
 def run_stage(script, config, watch_dir=None):
     \"\"\"Runs `python -u <script> --config <config>` via subprocess, streaming
     stdout, while a background thread mirrors any *.ckpt files written under
@@ -161,46 +161,30 @@ def run_stage(script, config, watch_dir=None):
     if proc.returncode != 0:
         raise SystemExit(f"{script} failed with code {proc.returncode}")
     print(f"=== {script} ({config}) COMPLETE ===")
-
-
-def set_checkpoint(config_path, new_checkpoint):
-    \"\"\"Regex-patches a config's checkpoint: line in place -- same technique
-    the reference notebook uses to patch a config before a training stage.
-    \"\"\"
-    path = os.path.join(REPO_DIR, config_path)
-    with open(path) as f:
-        cfg = f.read()
-    cfg = re.sub(r"checkpoint: .*", f"checkpoint: {new_checkpoint}", cfg, count=1)
-    with open(path, "w") as f:
-        f.write(cfg)
 """
 
 EXPERIMENT_2_CELL = """\
 # -- Experiment 2: NeutrinoJEPAPET (JEPA pre-training) --
+# Each stage has its own dedicated config with its own checkpoint.dirpath
+# (configs/probe_jepa.yaml, configs/finetune_jepa.yaml) -- no runtime config
+# patching needed, and no risk of colliding with the MAE experiment's
+# checkpoints below.
 run_stage("train/pretrain.py", "configs/pretrain.yaml",
           watch_dir=os.path.join(REPO_DIR, "checkpoints/pretrain_jepa_v1"))
-
-set_checkpoint("configs/probe.yaml", "checkpoints/pretrain_jepa_v1/epoch99.ckpt")
-run_stage("train/probe.py", "configs/probe.yaml",
-          watch_dir=os.path.join(REPO_DIR, "checkpoints/probe_v1"))
-
-set_checkpoint("configs/finetune.yaml", "checkpoints/pretrain_jepa_v1/epoch99.ckpt")
-run_stage("train/finetune.py", "configs/finetune.yaml",
-          watch_dir=os.path.join(REPO_DIR, "checkpoints/finetune_v1"))
+run_stage("train/probe.py", "configs/probe_jepa.yaml",
+          watch_dir=os.path.join(REPO_DIR, "checkpoints/jepa_probe_v1"))
+run_stage("train/finetune.py", "configs/finetune_jepa.yaml",
+          watch_dir=os.path.join(REPO_DIR, "checkpoints/jepa_finetune_v1"))
 """
 
 EXPERIMENT_1_CELL = """\
 # -- Experiment 1: NeutrinoPET (MAE pre-training) --
 run_stage("train/pretrain_mae.py", "configs/pretrain_mae.yaml",
           watch_dir=os.path.join(REPO_DIR, "checkpoints/pretrain_mae_v1"))
-
-set_checkpoint("configs/probe.yaml", "checkpoints/pretrain_mae_v1/epoch99.ckpt")
-run_stage("train/probe.py", "configs/probe.yaml",
-          watch_dir=os.path.join(REPO_DIR, "checkpoints/probe_v1"))
-
-set_checkpoint("configs/finetune.yaml", "checkpoints/pretrain_mae_v1/epoch99.ckpt")
-run_stage("train/finetune.py", "configs/finetune.yaml",
-          watch_dir=os.path.join(REPO_DIR, "checkpoints/finetune_v1"))
+run_stage("train/probe.py", "configs/probe_mae.yaml",
+          watch_dir=os.path.join(REPO_DIR, "checkpoints/mae_probe_v1"))
+run_stage("train/finetune.py", "configs/finetune_mae.yaml",
+          watch_dir=os.path.join(REPO_DIR, "checkpoints/mae_finetune_v1"))
 """
 
 EXPERIMENT_3_CELL = """\
@@ -208,6 +192,8 @@ EXPERIMENT_3_CELL = """\
 run_stage("train/finetune.py", "configs/scratch.yaml",
           watch_dir=os.path.join(REPO_DIR, "checkpoints/scratch_v1"))
 print("=== All 3 experiments complete ===")
+print("Final checkpoint directories: jepa_probe_v1, jepa_finetune_v1,")
+print("mae_probe_v1, mae_finetune_v1, scratch_v1")
 """
 
 

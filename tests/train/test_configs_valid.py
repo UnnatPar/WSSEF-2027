@@ -3,10 +3,13 @@ import glob
 from train.config import flatten_sections, load_config
 
 CONFIG_FILES = sorted(glob.glob("configs/*.yaml"))
+SUPERVISED_CONFIGS = [
+    "probe_jepa.yaml", "probe_mae.yaml", "finetune_jepa.yaml", "finetune_mae.yaml", "scratch.yaml",
+]
 
 
-def test_at_least_five_configs_exist():
-    assert len(CONFIG_FILES) == 5
+def test_at_least_seven_configs_exist():
+    assert len(CONFIG_FILES) == 7
 
 
 def test_all_configs_parse():
@@ -30,8 +33,8 @@ def test_pretrain_mae_config_flattens_to_required_fields():
         assert hasattr(flat, field), f"missing {field}"
 
 
-def test_probe_finetune_scratch_configs_flatten_to_supervised_fields():
-    for name in ["probe.yaml", "finetune.yaml", "scratch.yaml"]:
+def test_supervised_configs_flatten_to_required_fields():
+    for name in SUPERVISED_CONFIGS:
         cfg = load_config(f"configs/{name}")
         flat = flatten_sections(cfg, "model", "training")
         for field in ["d", "L", "k", "freeze_encoder", "lr_encoder", "lr_heads",
@@ -44,23 +47,40 @@ def test_scratch_config_has_no_checkpoint():
     assert not hasattr(cfg.model, "checkpoint")
 
 
-def test_probe_config_freezes_encoder():
-    cfg = load_config("configs/probe.yaml")
-    assert cfg.model.freeze_encoder is True
-
-
-def test_finetune_config_does_not_freeze_encoder():
-    cfg = load_config("configs/finetune.yaml")
-    assert cfg.model.freeze_encoder is False
-
-
-def test_probe_finetune_scratch_configs_have_distinct_checkpoint_dirs():
-    dirpaths = set()
-    for name in ["probe.yaml", "finetune.yaml", "scratch.yaml"]:
+def test_probe_configs_freeze_encoder():
+    for name in ["probe_jepa.yaml", "probe_mae.yaml"]:
         cfg = load_config(f"configs/{name}")
-        assert hasattr(cfg.checkpoint, "dirpath"), f"{name} missing checkpoint.dirpath"
+        assert cfg.model.freeze_encoder is True, f"{name} should freeze the encoder"
+
+
+def test_finetune_and_scratch_configs_do_not_freeze_encoder():
+    for name in ["finetune_jepa.yaml", "finetune_mae.yaml", "scratch.yaml"]:
+        cfg = load_config(f"configs/{name}")
+        assert cfg.model.freeze_encoder is False, f"{name} should not freeze the encoder"
+
+
+def test_probe_and_finetune_configs_point_at_the_right_pretrain_checkpoint():
+    jepa_source = "pretrain_jepa_v1"
+    mae_source = "pretrain_mae_v1"
+    for name in ["probe_jepa.yaml", "finetune_jepa.yaml"]:
+        cfg = load_config(f"configs/{name}")
+        assert jepa_source in cfg.model.checkpoint, f"{name} should point at a {jepa_source} checkpoint"
+    for name in ["probe_mae.yaml", "finetune_mae.yaml"]:
+        cfg = load_config(f"configs/{name}")
+        assert mae_source in cfg.model.checkpoint, f"{name} should point at a {mae_source} checkpoint"
+
+
+def test_all_supervised_and_pretrain_configs_have_distinct_checkpoint_dirs():
+    # This is the exact bug this config split fixes: jepa-probe and mae-probe
+    # (and jepa-finetune / mae-finetune) used to share a checkpoint.dirpath
+    # and silently overwrite each other's checkpoints when both experiments
+    # ran in the same notebook session.
+    dirpaths = set()
+    for path in CONFIG_FILES:
+        cfg = load_config(path)
+        assert hasattr(cfg.checkpoint, "dirpath"), f"{path} missing checkpoint.dirpath"
         dirpaths.add(cfg.checkpoint.dirpath)
-    assert len(dirpaths) == 3
+    assert len(dirpaths) == len(CONFIG_FILES)
 
 
 def test_all_data_sections_have_geometry_path():
