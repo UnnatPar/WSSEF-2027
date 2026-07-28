@@ -51,12 +51,13 @@ class MAEPretrain(pl.LightningModule):
         x_masked = x.clone()
         x_masked[mask_idx, 3:5] = 0.0  # zero out (t, q) at masked positions
 
-        node_embeddings = self.encoder(x_masked, batch_vec)
+        n_events = int(batch_vec.max().item()) + 1
+        node_embeddings = self.encoder(x_masked, batch_vec, batch_size=n_events)
         pred_tq = self.mae_head(node_embeddings[mask_idx])
         true_tq = x[mask_idx, 3:5]
 
         loss = F.mse_loss(pred_tq, true_tq)
-        self.log("train/mae_loss", loss, batch_size=int(batch_vec.max().item()) + 1)
+        self.log("train/mae_loss", loss, batch_size=n_events)
         return loss
 
     def configure_optimizers(self):

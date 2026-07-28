@@ -40,8 +40,8 @@ class SupervisedFineTune(pl.LightningModule):
             for p in self.encoder.parameters():
                 p.requires_grad_(False)
 
-    def _forward(self, batch):
-        g = self.encoder.encode_event(batch.x, batch.batch)
+    def _forward(self, batch, batch_size: int | None = None):
+        g = self.encoder.encode_event(batch.x, batch.batch, batch_size=batch_size)
         az, zen = self.direction_head(g)
         kappa = self.kappa_head(g)
         return g, az, zen, kappa
@@ -68,17 +68,17 @@ class SupervisedFineTune(pl.LightningModule):
         return loss
 
     def training_step(self, batch, batch_idx):
-        g, az, zen, kappa = self._forward(batch)
-        loss = self._compute_loss(batch, g, az, zen, kappa)
         n_events = int(batch.batch.max().item()) + 1
+        g, az, zen, kappa = self._forward(batch, batch_size=n_events)
+        loss = self._compute_loss(batch, g, az, zen, kappa)
         self.log("train/loss", loss, batch_size=n_events)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        g, az, zen, kappa = self._forward(batch)
+        n_events = int(batch.batch.max().item()) + 1
+        g, az, zen, kappa = self._forward(batch, batch_size=n_events)
         loss = self._compute_loss(batch, g, az, zen, kappa)
         angular_error = mean_angular_error(az, zen, batch.azimuth, batch.zenith)
-        n_events = int(batch.batch.max().item()) + 1
         self.log("val/loss", loss, batch_size=n_events)
         self.log("val/angular_error", angular_error, batch_size=n_events)
         return loss

@@ -40,6 +40,7 @@ class NeutrinoJEPA(pl.LightningModule):
         offsets = torch.zeros(counts.numel() + 1, dtype=torch.long, device=x.device)
         torch.cumsum(counts, dim=0, out=offsets[1:])
         offsets = offsets.tolist()
+        n_events = len(offsets) - 1  # free -- offsets is already synced above
 
         # Build one whole-batch boolean target mask (slice-assigning each
         # event's bool tensor -- a plain copy, not an index op) instead of
@@ -68,9 +69,9 @@ class NeutrinoJEPA(pl.LightningModule):
         # self.encoder's own parameters).
         with self.ema.average_parameters():
             with torch.no_grad():
-                z_tgt = self.encoder(x, batch_vec)
+                z_tgt = self.encoder(x, batch_vec, batch_size=n_events)
 
-        g_ctx = self.encoder.encode_event(x_ctx, batch_vec)
+        g_ctx = self.encoder.encode_event(x_ctx, batch_vec, batch_size=n_events)
         ev_of_tgt = batch_vec[target_flat]
         pred_input = torch.cat([g_ctx[ev_of_tgt], x[target_flat, :3]], dim=-1)
         pred = self.predictor(pred_input)
@@ -80,7 +81,6 @@ class NeutrinoJEPA(pl.LightningModule):
         target_n = F.normalize(target, dim=-1)
         loss = 2 - 2 * (pred_n * target_n).sum(-1).mean()
 
-        n_events = int(batch_vec.max().item()) + 1
         self.log("train/loss", loss, batch_size=n_events)
         return loss
 

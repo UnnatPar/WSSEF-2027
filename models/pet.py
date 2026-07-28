@@ -29,10 +29,19 @@ class PETBlock(nn.Module):
             nn.Linear(d, 4 * d), nn.GELU(), nn.Linear(4 * d, d)
         )
 
-    def forward(self, x: Tensor, batch: Tensor) -> Tensor:
+    def forward(self, x: Tensor, batch: Tensor, batch_size: int | None = None) -> Tensor:
         n = x.shape[0]
         k = min(self.k, n - 1) if n > 1 else 1
-        edge_index = knn_graph(x, k=k, batch=batch, flow="source_to_target")
+        # Passing batch_size explicitly skips torch_cluster.knn's internal
+        # `int(batch.max()) + 1`, a synchronizing GPU->CPU round trip it
+        # otherwise repeats on every one of the L blocks' calls (verified via
+        # torch.profiler on a real L4: aten::_local_scalar_dense + a chunk of
+        # cudaStreamSynchronize traced directly to this line -- see ledger
+        # 2026-07-28). The caller already knows batch_size from its own batch
+        # vector at zero extra sync cost.
+        edge_index = knn_graph(
+            x, k=k, batch=batch, flow="source_to_target", batch_size=batch_size,
+        )
         src, dst = edge_index[0], edge_index[1]
 
         e_ij = self.edge_mlp(torch.cat([x[dst], x[src] - x[dst]], dim=-1))
@@ -59,14 +68,14 @@ class PETEncoder(nn.Module):
         self.blocks = nn.ModuleList([PETBlock(d, k) for _ in range(L)])
         self.pool_proj = nn.Linear(3 * d, d)  # 3-way: mean + max + sum
 
-    def forward(self, x: Tensor, batch: Tensor) -> Tensor:
+    def forward(self, x: Tensor, batch: Tensor, batch_size: int | None = None) -> Tensor:
         x = self.input_proj(x)
         for block in self.blocks:
-            x = block(x, batch)
+            x = block(x, batch, batch_size=batch_size)
         return x
 
-    def encode_event(self, x: Tensor, batch: Tensor) -> Tensor:
-        x = self.forward(x, batch)
+    def encode_event(self, x: Tensor, batch: Tensor, batch_size: int | None = None) -> Tensor:
+        x = self.forward(x, batch, batch_size=batch_size)
         g = torch.cat([
             global_mean_pool(x, batch),
             global_max_pool(x, batch),
