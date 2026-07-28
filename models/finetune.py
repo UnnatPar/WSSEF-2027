@@ -51,7 +51,12 @@ class SupervisedFineTune(pl.LightningModule):
         pred = torch.cat([pred_vec, kappa], dim=-1)
         true_vec = to_cartesian(batch.azimuth, batch.zenith)
 
-        direction_loss = self.direction_loss_fn(pred, true_vec)
+        # graphnet's VonMisesFisher3DLoss.log_cmk mixes its two internal branches
+        # (log_cmk_approx, log_cmk_exact) in an index_put -- under AMP autocast
+        # they land in different dtypes (bf16 vs fp32) and the assignment throws.
+        # Verified by direct testing on a real training step, not a fixture.
+        with torch.autocast(device_type=pred.device.type, enabled=False):
+            direction_loss = self.direction_loss_fn(pred.float(), true_vec.float())
         loss = self.cfg.lambda_direction * direction_loss
 
         if hasattr(batch, "pid"):
