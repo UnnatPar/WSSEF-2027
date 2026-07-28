@@ -1,3 +1,5 @@
+import random
+
 import lightning as pl
 import torch
 import torch.nn.functional as F
@@ -24,22 +26,40 @@ class NeutrinoJEPA(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         x, batch_vec = batch.x, batch.batch
 
-        context_idx, target_idx = [], []
-        for ev in batch_vec.unique():
-            event_mask = batch_vec == ev
-            xyz = x[event_mask, :3]
-            ratio = torch.empty(1, device=x.device).uniform_(
-                self.cfg.ratio_min, self.cfg.ratio_max
-            ).item()
-            ctx, tgt = spatial_cluster_mask(xyz, ratio, self.cfg.n_clusters)
-            idx = event_mask.nonzero(as_tuple=True)[0]
-            context_idx.append(idx[ctx])
-            target_idx.append(idx[tgt])
+        # PyG batching lays out each event's nodes contiguously (sorted by
+        # event), so per-event slices are exact offset ranges -- no need for
+        # a boolean event_mask + nonzero() per event. Offsets are pulled to
+        # CPU with a single .tolist() (one sync total) instead of one
+        # implicit sync per event via slice-bound .item() conversion; the
+        # mask ratio is drawn with plain Python `random` instead of a GPU
+        # tensor + .item(). Previously this loop (up to 256 events/step) did
+        # 2+ synchronizing GPU round trips per event -- profiling on a real
+        # L4 showed this class of sync stall dominating step time (see
+        # ledger 2026-07-28).
+        counts = torch.bincount(batch_vec)
+        offsets = torch.zeros(counts.numel() + 1, dtype=torch.long, device=x.device)
+        torch.cumsum(counts, dim=0, out=offsets[1:])
+        offsets = offsets.tolist()
 
-        target_flat = torch.cat(target_idx)
+        # Build one whole-batch boolean target mask (slice-assigning each
+        # event's bool tensor -- a plain copy, not an index op) instead of
+        # converting each event's mask to indices via boolean-mask indexing
+        # (`idx[tgt]`), which calls a synchronizing nonzero() once per
+        # event. That collapses up to 256 nonzero() calls/step into 1.
+        # (`context` was computed here too but never used below -- dropped.)
+        n_total = x.shape[0]
+        target_mask = torch.zeros(n_total, dtype=torch.bool, device=x.device)
+        for ev in range(len(offsets) - 1):
+            start, end = offsets[ev], offsets[ev + 1]
+            xyz = x[start:end, :3]
+            ratio = random.uniform(self.cfg.ratio_min, self.cfg.ratio_max)
+            _, tgt = spatial_cluster_mask(xyz, ratio, self.cfg.n_clusters)
+            target_mask[start:end] = tgt
+
+        target_flat = target_mask.nonzero(as_tuple=True)[0]
 
         x_ctx = x.clone()
-        x_ctx[target_flat] = 0.0
+        x_ctx[target_mask] = 0.0
 
         # Target encoding uses self.encoder with EMA-swapped weights, not a
         # separate target_encoder module (the spec's literal snippet keeps

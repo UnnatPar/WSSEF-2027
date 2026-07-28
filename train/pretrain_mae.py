@@ -11,14 +11,20 @@ from train.data import build_dataloader, build_dataset
 from train.pretrain import build_trainer
 
 
-def uniform_random_mask(n: int, ratio: float) -> torch.Tensor:
+def uniform_random_mask(n: int, ratio: float, device=None) -> torch.Tensor:
     """Per PolarBERT paper convention: 25% of pulses masked uniformly at
     random (distinct from data.masking.spatial_cluster_mask, which is
-    JEPA-only)."""
-    mask = torch.zeros(n, dtype=torch.bool)
+    JEPA-only).
+
+    Accepts `device` so the training loop can build this directly on GPU --
+    without it, the mask is built on CPU and every subsequent boolean-index
+    use (`x[mask]`) implicitly transfers it and calls a synchronizing
+    `nonzero()`, which showed up as ~50% of step time in profiling on a real
+    L4 (see ledger 2026-07-28)."""
+    mask = torch.zeros(n, dtype=torch.bool, device=device)
     n_masked = int(ratio * n)
     if n_masked > 0:
-        perm = torch.randperm(n)[:n_masked]
+        perm = torch.randperm(n, device=device)[:n_masked]
         mask[perm] = True
     return mask
 
@@ -36,14 +42,18 @@ class MAEPretrain(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         x, batch_vec = batch.x, batch.batch
         n = x.shape[0]
-        mask = uniform_random_mask(n, self.cfg.mask_ratio)
+        mask = uniform_random_mask(n, self.cfg.mask_ratio, device=x.device)
+        # Boolean-index gather/scatter (`x[mask]`) calls a synchronizing
+        # nonzero() internally every time it's used. Compute it once here
+        # and reuse the integer indices instead of indexing by `mask` twice.
+        mask_idx = mask.nonzero(as_tuple=True)[0]
 
         x_masked = x.clone()
-        x_masked[mask, 3:5] = 0.0  # zero out (t, q) at masked positions
+        x_masked[mask_idx, 3:5] = 0.0  # zero out (t, q) at masked positions
 
         node_embeddings = self.encoder(x_masked, batch_vec)
-        pred_tq = self.mae_head(node_embeddings[mask])
-        true_tq = x[mask, 3:5]
+        pred_tq = self.mae_head(node_embeddings[mask_idx])
+        true_tq = x[mask_idx, 3:5]
 
         loss = F.mse_loss(pred_tq, true_tq)
         self.log("train/mae_loss", loss, batch_size=int(batch_vec.max().item()) + 1)

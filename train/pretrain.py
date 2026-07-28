@@ -1,12 +1,19 @@
 import argparse
 
 import lightning as pl
+import torch
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import WandbLogger
 
 from models.jepa import NeutrinoJEPA
 from train.config import flatten_sections, load_config
 from train.data import build_dataloader, build_dataset
+
+# Tensor Cores on Ampere+ (A100, L4) go unused at the default "highest"
+# setting -- this trades a rounding-error's worth of matmul precision
+# (irrelevant next to bf16/fp16 AMP, which is already coarser) for real
+# throughput. Set once per process, before any CUDA tensor is created.
+torch.set_float32_matmul_precision("high")
 
 
 def build_model(flat_cfg) -> NeutrinoJEPA:

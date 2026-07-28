@@ -1,4 +1,5 @@
 import lightning as pl
+import torch
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
 from lightning.pytorch.loggers import CSVLogger, WandbLogger
 
@@ -6,6 +7,8 @@ from models.finetune import build_supervised_model
 from train.checkpoints import latest_checkpoint
 from train.config import flatten_sections, load_config
 from train.data import build_dataloader, build_dataset
+
+torch.set_float32_matmul_precision("high")
 
 build_probe_model = build_supervised_model
 build_finetune_model = build_supervised_model
