@@ -73,6 +73,7 @@ subprocess.run(
 subprocess.run(
     ["pip", "install", "-q", "--force-reinstall", "--no-deps",
      "torch-geometric==2.5.0", "torch-cluster==1.6.3", "torch-scatter==2.1.2",
+     "torch-sparse==0.6.18",
      "-f", "https://data.pyg.org/whl/torch-2.3.0+cu121.html"],
     check=True,
 )
