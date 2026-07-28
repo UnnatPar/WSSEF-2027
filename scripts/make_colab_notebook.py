@@ -6,7 +6,7 @@ downloading data, training -- is a subprocess.run/Popen call into a script
 that already lives in this repo (scripts/download_data.sh, train/*.py). The
 notebook itself only orchestrates: it never reimplements data loading,
 training loops, or checkpoint logic inline. That's the same reason
-train/data.py, train/pretrain.py etc. exist as real .py files instead of
+train/dataset.py, train/pretrain.py etc. exist as real .py files instead of
 being pasted into notebook cells -- this notebook just calls them.
 """
 

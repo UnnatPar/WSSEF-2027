@@ -42,11 +42,11 @@ def test_graphnet_kaggle_symbols_exist():
     # here rather than deep in a data-loading stack trace if a graphnet
     # version bump ever moves/renames them.
     #
-    # NOTE: graphnet.data.dataset.ParquetDataset is NOT used by train/data.py
+    # NOTE: graphnet.data.dataset.ParquetDataset is NOT used by train/dataset.py
     # despite the name -- verified by direct testing, it expects its own
     # converted chunked directory format (produced by GraphNeT's
     # DataConverter/ParquetWriter), not the raw Kaggle competition files.
-    # train/data.py reads the raw files itself and only reuses
+    # train/dataset.py reads the raw files itself and only reuses
     # IceCubeKaggle().feature_map() for normalization.
     from graphnet.models.detector.icecube import IceCubeKaggle
     from graphnet.training.loss_functions import VonMisesFisher3DLoss  # noqa: F401

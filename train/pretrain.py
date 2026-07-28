@@ -7,7 +7,7 @@ from lightning.pytorch.loggers import WandbLogger
 
 from models.jepa import NeutrinoJEPA
 from train.config import flatten_sections, load_config
-from train.data import build_dataloader, build_dataset
+from train.dataset import build_dataloader, build_dataset
 
 # Tensor Cores on Ampere+ (A100, L4) go unused at the default "highest"
 # setting -- this trades a rounding-error's worth of matmul precision

@@ -28,7 +28,7 @@ from eval.tables import build_summary_table, save_summary_table
 from models.finetune import load_full_checkpoint
 from train.checkpoints import latest_checkpoint
 from train.config import flatten_sections, load_config
-from train.data import build_dataloader, build_dataset
+from train.dataset import build_dataloader, build_dataset
 from train.pretrain_mae import uniform_random_mask
 
 

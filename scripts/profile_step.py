@@ -16,7 +16,7 @@ from types import SimpleNamespace
 import torch
 
 from models.jepa import NeutrinoJEPA
-from train.data import build_dataloader, build_dataset
+from train.dataset import build_dataloader, build_dataset
 from train.pretrain_mae import MAEPretrain
 
 device = torch.device("cuda")

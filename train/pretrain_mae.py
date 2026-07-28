@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from models.heads import MAEHead
 from models.pet import PETEncoder
 from train.config import flatten_sections, load_config
-from train.data import build_dataloader, build_dataset
+from train.dataset import build_dataloader, build_dataset
 from train.pretrain import build_trainer
 
 

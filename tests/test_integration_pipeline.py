@@ -111,10 +111,10 @@ def test_experiment_3_from_scratch_needs_no_checkpoint():
 def test_real_kaggle_schema_pipeline_end_to_end(
     tiny_batch_dir, tiny_sensor_geometry_csv, tiny_meta_parquet
 ):
-    # Exercises train/data.py's real loader (not the hand-built TinyEventDataset
+    # Exercises train/dataset.py's real loader (not the hand-built TinyEventDataset
     # above) feeding directly into the JEPA pretraining step, closing the loop
     # between the data-loading layer and the model layer.
-    from train.data import build_dataloader, build_dataset
+    from train.dataset import build_dataloader, build_dataset
 
     dataset = build_dataset(
         str(tiny_batch_dir), str(tiny_sensor_geometry_csv), str(tiny_meta_parquet),

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import torch
 
-from train.data import (
+from train.dataset import (
     KaggleParquetDataset,
     MaxPulsesDataset,
     batch_file_paths,

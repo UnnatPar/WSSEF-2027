@@ -8,7 +8,7 @@ import torch
 from torch.profiler import ProfilerActivity, profile
 from types import SimpleNamespace
 
-from train.data import build_dataloader, build_dataset
+from train.dataset import build_dataloader, build_dataset
 from train.pretrain_mae import MAEPretrain
 
 device = torch.device("cuda")

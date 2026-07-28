@@ -6,7 +6,7 @@ from lightning.pytorch.loggers import CSVLogger, WandbLogger
 from models.finetune import build_supervised_model
 from train.checkpoints import latest_checkpoint
 from train.config import flatten_sections, load_config
-from train.data import build_dataloader, build_dataset
+from train.dataset import build_dataloader, build_dataset
 
 torch.set_float32_matmul_precision("high")
 
