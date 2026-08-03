@@ -1,4 +1,13 @@
 import argparse
+import os
+import sys
+
+# See train/pretrain_mae.py for why this is needed: a directly-invoked
+# script only gets its own directory on sys.path, not the repo root -- so
+# even `from train.supervised import ...` (a sibling module in the same
+# package as this file) fails without it, since `train` itself isn't
+# importable as a package from inside its own directory.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from train.supervised import build_probe_model, run_supervised
 

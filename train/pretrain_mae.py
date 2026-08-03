@@ -1,4 +1,16 @@
 import argparse
+import os
+import sys
+
+# Running this file directly (`python train/pretrain_mae.py`, exactly as
+# documented in README.md / neutrinojepa.md / the generated Colab notebook)
+# only puts this file's own directory (train/) on sys.path -- Python never
+# adds the repo root for a directly-invoked script. Without this, the
+# `from models...` / `from data...` imports below fail with
+# `ModuleNotFoundError` in a fresh environment with no PYTHONPATH set (only
+# masked previously by pytest's own rootdir insertion, or by callers that
+# imported main() in-process instead of running this file as a script).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import lightning as pl
 import torch

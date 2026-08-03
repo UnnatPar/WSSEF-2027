@@ -11,6 +11,11 @@ pipeline doesn't produce. That needs a separate sweep script.
 
 import argparse
 import os
+import sys
+
+# See train/pretrain_mae.py for why this is needed: a directly-invoked
+# script only gets its own directory on sys.path, not the repo root.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pandas as pd
 import torch
