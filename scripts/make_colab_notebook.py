@@ -35,6 +35,7 @@ CONFIG_CELL = """\
 REPO_URL = "https://github.com/UnnatPar/WSSEF-2027.git"
 REPO_DIR = "/content/WSSEF-2027"
 DRIVE_CHECKPOINT_DIR = "/content/drive/MyDrive/neutrinojepa_checkpoints"
+DRIVE_DATA_DIR = "/content/drive/MyDrive/neutrinojepa_data"
 """
 
 INSTALL_CELL = """\
@@ -110,6 +111,16 @@ train_dir = os.path.join(DATA_DIR, "train")
 BATCH_RANGES = "1-50 595-660"
 REQUIRED_BATCHES = 116
 
+# A fresh session's local disk is always empty -- re-downloading ~20GB from
+# Kaggle on every session death (a session dying is the expected case, not
+# an edge case, per the ~1.5-2hr lifetime limit) would burn a large chunk of
+# each new session's short lifetime before training even resumes. Restore
+# from Drive first if a prior session already did this download.
+drive_train_dir = os.path.join(DRIVE_DATA_DIR, "train")
+if os.path.exists(drive_train_dir) and len(glob.glob(os.path.join(drive_train_dir, "*.parquet"))) >= REQUIRED_BATCHES:
+    print(f"Restoring dataset from Drive ({drive_train_dir}) instead of re-downloading...")
+    shutil.copytree(DRIVE_DATA_DIR, DATA_DIR, dirs_exist_ok=True)
+
 if not os.path.exists(train_dir) or len(glob.glob(os.path.join(train_dir, "*.parquet"))) < REQUIRED_BATCHES:
     dl = subprocess.Popen(
         ["bash", "scripts/download_data.sh", DATA_DIR, BATCH_RANGES],
@@ -120,6 +131,11 @@ if not os.path.exists(train_dir) or len(glob.glob(os.path.join(train_dir, "*.par
     dl.wait()
     if dl.returncode != 0:
         raise SystemExit("download_data.sh failed")
+    # Persist to Drive so the next session (after this one dies) restores
+    # instead of re-downloading.
+    os.makedirs(DRIVE_DATA_DIR, exist_ok=True)
+    shutil.copytree(DATA_DIR, DRIVE_DATA_DIR, dirs_exist_ok=True)
+    print(f"Dataset backed up to Drive at {DRIVE_DATA_DIR}")
 
 n_batches = len(glob.glob(os.path.join(train_dir, "*.parquet")))
 print(f"{n_batches} batch files ready")
@@ -134,21 +150,53 @@ def run_stage(script, config, watch_dir=None):
     stdout, while a background thread mirrors any *.ckpt files written under
     watch_dir to Drive as they appear (debounced on stable file size, same
     pattern as the reference notebook's checkpoint watcher).
+
+    Restores from Drive into watch_dir FIRST, before starting the subprocess:
+    a fresh session's local checkpoint dir is always empty (fresh clone), but
+    train/*.py's auto-resume logic only checks the LOCAL dir for last.ckpt --
+    without this restore, every session death would silently restart this
+    stage from step 0 instead of resuming, even though Drive has the progress.
     \"\"\"
+    _synced_mtime = {}  # path -> mtime already copied to Drive
+
+    if watch_dir is not None:
+        drive_src = os.path.join(DRIVE_CHECKPOINT_DIR, os.path.basename(watch_dir))
+        if os.path.isdir(drive_src) and glob.glob(os.path.join(drive_src, "*.ckpt")):
+            os.makedirs(watch_dir, exist_ok=True)
+            shutil.copytree(drive_src, watch_dir, dirs_exist_ok=True)
+            print(f"=== Restored checkpoints from Drive: {drive_src} -> {watch_dir} ===", flush=True)
+            # These are already in sync with Drive -- seed the watcher so it
+            # doesn't immediately re-copy them back on its first poll.
+            for path in glob.glob(os.path.join(watch_dir, "*.ckpt")):
+                try:
+                    _synced_mtime[path] = os.path.getmtime(path)
+                except OSError:
+                    pass
+
     _stop = threading.Event()
-    _seen = set()
 
     def watcher():
         if watch_dir is None:
             return
         while not _stop.is_set():
             for path in glob.glob(os.path.join(watch_dir, "*.ckpt")):
-                if path in _seen:
+                # last.ckpt (from save_last=True) is the SAME filename
+                # rewritten every checkpoint interval, not a new file each
+                # time -- keying sync-state on path alone (as a plain "seen"
+                # set) would sync it to Drive exactly once, ever, and then
+                # silently never again for the rest of this stage, leaving
+                # Drive with a permanently stale snapshot. Keying on mtime
+                # instead means every real rewrite is detected and re-synced.
+                try:
+                    mtime = os.path.getmtime(path)
+                except OSError:
+                    continue
+                if _synced_mtime.get(path) == mtime:
                     continue
                 try:
                     s1 = os.path.getsize(path); time.sleep(5); s2 = os.path.getsize(path)
-                    if s1 != s2 or s1 == 0:
-                        continue
+                    if s1 != s2 or s1 == 0 or os.path.getmtime(path) != mtime:
+                        continue  # still being written, or changed again mid-debounce; catch it next poll
                 except OSError:
                     continue
                 drive_dst = os.path.join(DRIVE_CHECKPOINT_DIR, os.path.basename(watch_dir), os.path.basename(path))
@@ -164,7 +212,7 @@ def run_stage(script, config, watch_dir=None):
                     print(f"=== CHECKPOINT SYNC FAILED for {os.path.basename(path)}: {e!r} "
                           f"(will retry) ===", flush=True)
                     continue
-                _seen.add(path)
+                _synced_mtime[path] = mtime
                 print(f"=== CHECKPOINT SYNCED: {os.path.basename(path)} -> Drive ===", flush=True)
             _stop.wait(30)
 

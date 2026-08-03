@@ -113,6 +113,45 @@ def test_notebook_watcher_does_not_let_drive_sync_errors_kill_the_thread():
     )
 
 
+def test_notebook_restores_checkpoints_from_drive_before_starting_a_stage():
+    # A fresh session's local checkpoint dir is always empty (fresh clone).
+    # Without restoring from Drive first, train/*.py's auto-resume (which only
+    # checks the local dir for last.ckpt) would silently restart every stage
+    # from step 0 on every session death, even though Drive has the progress.
+    source = "\n".join(cell["source"] for cell in build_notebook()["cells"])
+    restore_idx = source.index("Restored checkpoints from Drive")
+    copytree_idx = source.rindex("shutil.copytree(drive_src, watch_dir", 0, restore_idx + 200)
+    start_stage_idx = source.index('proc = subprocess.Popen(\n        ["python", "-u", script,')
+    assert copytree_idx < start_stage_idx, (
+        "checkpoints must be restored from Drive before the training subprocess starts"
+    )
+
+
+def test_notebook_restores_dataset_from_drive_instead_of_always_redownloading():
+    # Re-downloading ~20GB from Kaggle on every session death (expected, not
+    # rare, given the ~1.5-2hr session lifetime) burns a large chunk of each
+    # new session's short lifetime before training can even resume.
+    source = "\n".join(cell["source"] for cell in build_notebook()["cells"])
+    assert "DRIVE_DATA_DIR" in source
+    assert "drive_train_dir" in source
+    restore_idx = source.index("Restoring dataset from Drive")
+    download_idx = source.index('["bash", "scripts/download_data.sh"')
+    assert restore_idx < download_idx, (
+        "must check for a Drive-persisted dataset before falling back to download_data.sh"
+    )
+
+
+def test_notebook_watcher_resyncs_last_ckpt_when_it_changes_not_just_once():
+    # last.ckpt (save_last=True) is the SAME filename rewritten every
+    # checkpoint interval, not a new file each time. A plain "seen this path
+    # before" set would sync it to Drive exactly once, ever, leaving Drive
+    # with a permanently stale snapshot for the rest of the stage. Sync state
+    # must be keyed on mtime (or something that changes on rewrite), not path.
+    source = "\n".join(cell["source"] for cell in build_notebook()["cells"])
+    assert "_synced_mtime" in source
+    assert "getmtime" in source
+
+
 def test_main_writes_a_loadable_notebook_file(tmp_path):
     from scripts.make_colab_notebook import main
 
