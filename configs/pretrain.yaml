@@ -30,4 +30,4 @@ logging:
 
 checkpoint:
   dirpath: checkpoints/pretrain_jepa_v1/
-  filename: "epoch{epoch}"
+  filename: "epoch{epoch:04d}-step{step:09d}"

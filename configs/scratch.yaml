@@ -33,4 +33,4 @@ logging:
 
 checkpoint:
   dirpath: checkpoints/scratch_v1/
-  filename: "epoch{epoch}"
+  filename: "epoch{epoch:04d}-step{step:09d}"

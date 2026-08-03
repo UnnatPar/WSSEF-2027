@@ -99,7 +99,11 @@ def main(config_path: str, fast_dev_run: bool = False):
         project=cfg.logging.project,
         checkpoint_dirpath=cfg.checkpoint.dirpath, checkpoint_filename=cfg.checkpoint.filename,
     )
-    trainer.fit(model, loader)
+    # Auto-resume from a prior session's last checkpoint -- see train/pretrain.py's
+    # build_trainer for why every_n_epochs=1 alone isn't enough for hours-long epochs.
+    last_ckpt = os.path.join(cfg.checkpoint.dirpath, "last.ckpt")
+    ckpt_path = last_ckpt if os.path.exists(last_ckpt) else None
+    trainer.fit(model, loader, ckpt_path=ckpt_path)
     return trainer
 
 

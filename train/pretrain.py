@@ -1,6 +1,7 @@
 import argparse
 import os
 import sys
+from datetime import timedelta
 
 # See train/pretrain_mae.py for why this is needed: a directly-invoked
 # script only gets its own directory on sys.path, not the repo root.
@@ -38,9 +39,17 @@ def build_trainer(
         max_epochs=flat_cfg.epochs,
         precision="16-mixed",
         gradient_clip_val=flat_cfg.grad_clip,
+        # Pretrain epochs (10M events / batch_size) run for hours -- far longer
+        # than a Colab session tends to survive. Checkpointing only at epoch
+        # boundaries (the old every_n_epochs=1) would mean a session death
+        # loses the entire epoch's progress. train_time_interval saves on wall
+        # clock instead, so a killed session never loses more than ~15 min of
+        # work; save_last=True always keeps a stable "last.ckpt" pointer for
+        # resume regardless of which of the last save_top_k files that is.
         callbacks=[ModelCheckpoint(
             dirpath=checkpoint_dirpath, filename=checkpoint_filename,
-            every_n_epochs=1, save_top_k=-1,
+            every_n_epochs=0, train_time_interval=timedelta(minutes=15),
+            save_top_k=1, save_last=True,
         )],
     )
     if fast_dev_run:
@@ -68,7 +77,13 @@ def main(config_path: str, fast_dev_run: bool = False):
         project=cfg.logging.project,
         checkpoint_dirpath=cfg.checkpoint.dirpath, checkpoint_filename=cfg.checkpoint.filename,
     )
-    trainer.fit(model, loader)
+    # Auto-resume: a fresh Colab session re-running this exact command should
+    # continue from wherever the last session's ModelCheckpoint left off, not
+    # restart from step 0 -- last.ckpt restores model, optimizer, and the
+    # global step/epoch counters.
+    last_ckpt = os.path.join(cfg.checkpoint.dirpath, "last.ckpt")
+    ckpt_path = last_ckpt if os.path.exists(last_ckpt) else None
+    trainer.fit(model, loader, ckpt_path=ckpt_path)
     return trainer
 
 

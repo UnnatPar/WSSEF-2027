@@ -31,4 +31,4 @@ logging:
 
 checkpoint:
   dirpath: checkpoints/mae_probe_v1/
-  filename: "epoch{epoch}"
+  filename: "epoch{epoch:04d}-step{step:09d}"
