@@ -15,7 +15,16 @@ import nbformat as nbf
 TITLE_CELL = """\
 # NeutrinoJEPA Training
 
-Run cells top to bottom. Checkpoints sync to Google Drive as they're written.
+Run cells top to bottom. Checkpoints are written locally under `checkpoints/`
+inside this VM -- they are NOT synced to Google Drive. `drive.mount()` blocks
+on an interactive OAuth prompt a headless/automated session has no way to
+answer, and (worse) silently degrades to writing a second local-only copy
+instead of raising an error if it never completes -- confirmed by direct
+testing, documented in the ledger's 2026-08-03 entry, and independently
+already hit once before by the sibling `lewm-jamba` project. The durable
+store is `unnat-brain/bin/colab-pull-ckpt.sh`, run from a normal machine (not
+inside Colab), which mirrors `*.ckpt` files off the VM via `colab download`
+on a timer. See that script's own header comment for why.
 
 Runs all 3 experiments, each via the repo's own scripts (this notebook does
 not reimplement any training logic):
@@ -26,7 +35,8 @@ not reimplement any training logic):
 
 Then evaluates all 5 resulting checkpoints (`jepa_probe`, `jepa_finetune`,
 `mae_probe`, `mae_finetune`, `scratch`) via `eval/run_report.py`, producing
-the 6 poster figures + summary table under `report/`, synced to Drive.
+the 6 poster figures + summary table under `report/` (also pulled off the VM
+externally, same as checkpoints, not synced to Drive).
 
 Requires a Kaggle API token in Colab secrets as `KAGGLE_USERNAME` / `KAGGLE_KEY`.
 """
@@ -34,8 +44,6 @@ Requires a Kaggle API token in Colab secrets as `KAGGLE_USERNAME` / `KAGGLE_KEY`
 CONFIG_CELL = """\
 REPO_URL = "https://github.com/UnnatPar/WSSEF-2027.git"
 REPO_DIR = "/content/WSSEF-2027"
-DRIVE_CHECKPOINT_DIR = "/content/drive/MyDrive/neutrinojepa_checkpoints"
-DRIVE_DATA_DIR = "/content/drive/MyDrive/neutrinojepa_data"
 """
 
 INSTALL_CELL = """\
@@ -44,7 +52,7 @@ INSTALL_CELL = """\
 # on torch and will silently upgrade it past the pin if installed afterward
 # (verified by direct testing while building this repo) -- torch/PyG are
 # installed LAST, after requirements.txt, to guarantee the pinned versions win.
-import subprocess, os, sys, threading, shutil, glob, time
+import subprocess, os, sys, glob
 
 subprocess.run(
     ["pip", "install", "-q", "torch==2.3.0", "--index-url", "https://download.pytorch.org/whl/cu121"],
@@ -81,61 +89,38 @@ subprocess.run(
 print("Dependencies installed")
 """
 
-DRIVE_CELL = """\
-# -- Mount Google Drive --
-from google.colab import drive
-drive.mount("/content/drive")
-os.makedirs(DRIVE_CHECKPOINT_DIR, exist_ok=True)
-print(f"Checkpoints will sync to: {DRIVE_CHECKPOINT_DIR}")
-"""
-
 DOWNLOAD_CELL = """\
 # -- Kaggle credentials + data download (via the repo's own script) --
-from google.colab import userdata
-
-os.makedirs(os.path.expanduser("~/.kaggle"), exist_ok=True)
-kaggle_json = os.path.expanduser("~/.kaggle/kaggle.json")
-with open(kaggle_json, "w") as f:
-    f.write('{"username": "%s", "key": "%s"}' % (
-        userdata.get("KAGGLE_USERNAME"), userdata.get("KAGGLE_KEY"),
-    ))
-os.chmod(kaggle_json, 0o600)
-subprocess.run(["pip", "install", "-q", "kaggle"], check=True)
+# `google.colab.userdata.get()` is also interactive-UI-only (same story as
+# the Drive mount this notebook deliberately doesn't use -- see TITLE_CELL)
+# and fails outright under headless/automated `colab exec` -- unlike Drive,
+# this one fails loudly (an exception), so upload
+# ~/.kaggle/access_token as a real file first (`colab upload`) instead of
+# relying on this cell to fetch it from Colab secrets.
+subprocess.run(["pip", "install", "-q", "-U", "kaggle"], check=True)  # 2.0.2 (Colab's stock
+# version) can't auth with the KGAT_... access-token format; needs 2.2.4+.
 
 DATA_DIR = os.path.join(REPO_DIR, "data")
 train_dir = os.path.join(DATA_DIR, "train")
 
 # Only the 116 batches configs/*.yaml actually reference (1-50 pretrain,
 # 595-660 val+test) -- ~23M events, ~20GB, not the full 660-file/118GB/130M-
-# event competition dataset, which doesn't fit on a Colab disk.
+# event competition dataset, which doesn't fit on a Colab disk. Re-downloaded
+# on every fresh session (no cross-session persistence for this -- see
+# TITLE_CELL for why Drive isn't used, and note Kaggle's own download path is
+# reliable, just not free time-wise, unlike the checkpoint-upload direction).
 BATCH_RANGES = "1-50 595-660"
 REQUIRED_BATCHES = 116
 
-# A fresh session's local disk is always empty -- re-downloading ~20GB from
-# Kaggle on every session death (a session dying is the expected case, not
-# an edge case, per the ~1.5-2hr lifetime limit) would burn a large chunk of
-# each new session's short lifetime before training even resumes. Restore
-# from Drive first if a prior session already did this download.
-drive_train_dir = os.path.join(DRIVE_DATA_DIR, "train")
-if os.path.exists(drive_train_dir) and len(glob.glob(os.path.join(drive_train_dir, "*.parquet"))) >= REQUIRED_BATCHES:
-    print(f"Restoring dataset from Drive ({drive_train_dir}) instead of re-downloading...")
-    shutil.copytree(DRIVE_DATA_DIR, DATA_DIR, dirs_exist_ok=True)
-
-if not os.path.exists(train_dir) or len(glob.glob(os.path.join(train_dir, "*.parquet"))) < REQUIRED_BATCHES:
-    dl = subprocess.Popen(
-        ["bash", "scripts/download_data.sh", DATA_DIR, BATCH_RANGES],
-        cwd=REPO_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-    )
-    for line in iter(dl.stdout.readline, b""):
-        sys.stdout.write(line.decode(errors="replace")); sys.stdout.flush()
-    dl.wait()
-    if dl.returncode != 0:
-        raise SystemExit("download_data.sh failed")
-    # Persist to Drive so the next session (after this one dies) restores
-    # instead of re-downloading.
-    os.makedirs(DRIVE_DATA_DIR, exist_ok=True)
-    shutil.copytree(DATA_DIR, DRIVE_DATA_DIR, dirs_exist_ok=True)
-    print(f"Dataset backed up to Drive at {DRIVE_DATA_DIR}")
+dl = subprocess.Popen(
+    ["bash", "scripts/download_data.sh", DATA_DIR, BATCH_RANGES],
+    cwd=REPO_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+)
+for line in iter(dl.stdout.readline, b""):
+    sys.stdout.write(line.decode(errors="replace")); sys.stdout.flush()
+dl.wait()
+if dl.returncode != 0:
+    raise SystemExit("download_data.sh failed")
 
 n_batches = len(glob.glob(os.path.join(train_dir, "*.parquet")))
 print(f"{n_batches} batch files ready")
@@ -144,79 +129,20 @@ if n_batches < REQUIRED_BATCHES:
 """
 
 HELPERS_CELL = """\
-# -- Shared helper: run a training stage, syncing new checkpoints to Drive --
+# -- Shared helper: run a training stage --
 def run_stage(script, config, watch_dir=None):
     \"\"\"Runs `python -u <script> --config <config>` via subprocess, streaming
-    stdout, while a background thread mirrors any *.ckpt files written under
-    watch_dir to Drive as they appear (debounced on stable file size, same
-    pattern as the reference notebook's checkpoint watcher).
-
-    Restores from Drive into watch_dir FIRST, before starting the subprocess:
-    a fresh session's local checkpoint dir is always empty (fresh clone), but
-    train/*.py's auto-resume logic only checks the LOCAL dir for last.ckpt --
-    without this restore, every session death would silently restart this
-    stage from step 0 instead of resuming, even though Drive has the progress.
+    stdout. `watch_dir` (checkpoints/<run>) is informational only here -- this
+    notebook does not sync checkpoints anywhere itself. The durable copy is
+    pulled from OUTSIDE this VM by `unnat-brain/bin/colab-pull-ckpt.sh`, run
+    from a normal machine against this session (see TITLE_CELL for why this
+    isn't Drive-based). If resuming a prior session's progress, the caller is
+    responsible for `colab upload`-ing the last pulled checkpoint into
+    `watch_dir` as `last.ckpt` BEFORE invoking this cell -- train/*.py's own
+    auto-resume picks it up from there with no notebook-side logic needed.
     \"\"\"
-    _synced_mtime = {}  # path -> mtime already copied to Drive
-
     if watch_dir is not None:
-        drive_src = os.path.join(DRIVE_CHECKPOINT_DIR, os.path.basename(watch_dir))
-        if os.path.isdir(drive_src) and glob.glob(os.path.join(drive_src, "*.ckpt")):
-            os.makedirs(watch_dir, exist_ok=True)
-            shutil.copytree(drive_src, watch_dir, dirs_exist_ok=True)
-            print(f"=== Restored checkpoints from Drive: {drive_src} -> {watch_dir} ===", flush=True)
-            # These are already in sync with Drive -- seed the watcher so it
-            # doesn't immediately re-copy them back on its first poll.
-            for path in glob.glob(os.path.join(watch_dir, "*.ckpt")):
-                try:
-                    _synced_mtime[path] = os.path.getmtime(path)
-                except OSError:
-                    pass
-
-    _stop = threading.Event()
-
-    def watcher():
-        if watch_dir is None:
-            return
-        while not _stop.is_set():
-            for path in glob.glob(os.path.join(watch_dir, "*.ckpt")):
-                # last.ckpt (from save_last=True) is the SAME filename
-                # rewritten every checkpoint interval, not a new file each
-                # time -- keying sync-state on path alone (as a plain "seen"
-                # set) would sync it to Drive exactly once, ever, and then
-                # silently never again for the rest of this stage, leaving
-                # Drive with a permanently stale snapshot. Keying on mtime
-                # instead means every real rewrite is detected and re-synced.
-                try:
-                    mtime = os.path.getmtime(path)
-                except OSError:
-                    continue
-                if _synced_mtime.get(path) == mtime:
-                    continue
-                try:
-                    s1 = os.path.getsize(path); time.sleep(5); s2 = os.path.getsize(path)
-                    if s1 != s2 or s1 == 0 or os.path.getmtime(path) != mtime:
-                        continue  # still being written, or changed again mid-debounce; catch it next poll
-                except OSError:
-                    continue
-                drive_dst = os.path.join(DRIVE_CHECKPOINT_DIR, os.path.basename(watch_dir), os.path.basename(path))
-                try:
-                    os.makedirs(os.path.dirname(drive_dst), exist_ok=True)
-                    shutil.copy2(path, drive_dst)
-                except OSError as e:
-                    # An unhandled exception here would silently kill this
-                    # daemon thread (e.g. Drive quota exhausted mid-run) --
-                    # checkpoint syncing would stop for the rest of this
-                    # stage with no visible error. Log and retry next poll
-                    # instead of leaving `path` unmarked-but-silently-lost.
-                    print(f"=== CHECKPOINT SYNC FAILED for {os.path.basename(path)}: {e!r} "
-                          f"(will retry) ===", flush=True)
-                    continue
-                _synced_mtime[path] = mtime
-                print(f"=== CHECKPOINT SYNCED: {os.path.basename(path)} -> Drive ===", flush=True)
-            _stop.wait(30)
-
-    threading.Thread(target=watcher, daemon=True).start()
+        os.makedirs(watch_dir, exist_ok=True)
 
     proc = subprocess.Popen(
         ["python", "-u", script, "--config", config],
@@ -225,7 +151,6 @@ def run_stage(script, config, watch_dir=None):
     for line in iter(proc.stdout.readline, b""):
         sys.stdout.write(line.decode(errors="replace")); sys.stdout.flush()
     proc.wait()
-    _stop.set()
 
     if proc.returncode != 0:
         raise SystemExit(f"{script} failed with code {proc.returncode}")
@@ -268,10 +193,12 @@ print("mae_probe_v1, mae_finetune_v1, scratch_v1")
 REPORT_CELL = """\
 # -- Evaluation: turn the 5 checkpoints into the 6 poster figures + table --
 # All the actual eval logic (inference, metrics, plotting) lives in
-# eval/run_report.py -- this cell only runs it and syncs the output to Drive.
-# Not run_stage(): this is a one-shot batch job, not an incremental training
-# run, so there's no checkpoint directory to watch -- and its CLI takes
-# different flags (--checkpoints-dir/--data-config/--output-dir, not --config).
+# eval/run_report.py -- this cell only runs it. Not run_stage(): this is a
+# one-shot batch job, not an incremental training run, so there's no
+# checkpoint directory to watch -- and its CLI takes different flags
+# (--checkpoints-dir/--data-config/--output-dir, not --config). Output stays
+# local under report/ -- pull it off the VM the same way as checkpoints
+# (`colab download`), not via Drive; see TITLE_CELL for why.
 REPORT_DIR = os.path.join(REPO_DIR, "report")
 report_proc = subprocess.Popen(
     ["python", "-u", "eval/run_report.py",
@@ -286,9 +213,7 @@ report_proc.wait()
 if report_proc.returncode != 0:
     raise SystemExit(f"eval/run_report.py failed with code {report_proc.returncode}")
 
-drive_report_dir = os.path.join(DRIVE_CHECKPOINT_DIR, "report")
-shutil.copytree(REPORT_DIR, drive_report_dir, dirs_exist_ok=True)
-print(f"Report synced to {drive_report_dir}")
+print(f"Report written to {REPORT_DIR}:")
 for fname in sorted(os.listdir(REPORT_DIR)):
     print(" -", fname)
 """
@@ -302,7 +227,6 @@ def build_notebook() -> nbf.NotebookNode:
         nbf.v4.new_code_cell(INSTALL_CELL),
         nbf.v4.new_code_cell(CLONE_CELL),
         nbf.v4.new_code_cell(REQUIREMENTS_CELL),
-        nbf.v4.new_code_cell(DRIVE_CELL),
         nbf.v4.new_code_cell(DOWNLOAD_CELL),
         nbf.v4.new_code_cell(HELPERS_CELL),
         nbf.v4.new_code_cell(EXPERIMENT_2_CELL),

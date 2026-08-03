@@ -10,7 +10,7 @@ def test_notebook_is_valid_nbformat():
 
 def test_notebook_has_expected_cell_count():
     nb = build_notebook()
-    assert len(nb["cells"]) == 12
+    assert len(nb["cells"]) == 11
 
 
 def test_notebook_never_reimplements_training_logic():
@@ -97,59 +97,39 @@ def test_notebook_runs_eval_report_after_all_experiments():
     report_source = sources[report_idx]
     assert "--checkpoints-dir" in report_source
     assert "--output-dir" in report_source
-    assert "shutil.copytree" in report_source  # syncs the report dir to Drive
 
 
-def test_notebook_watcher_does_not_let_drive_sync_errors_kill_the_thread():
-    # An unhandled OSError (e.g. Drive quota exhausted) inside the daemon
-    # watcher thread would silently kill it -- checkpoint syncing stops for
-    # the rest of that stage with no visible error to the user.
-    source = "\n".join(cell["source"] for cell in build_notebook()["cells"])
-    copy_idx = source.index("shutil.copy2(path, drive_dst)")
-    try_idx = source.rindex("try:", 0, copy_idx)
-    except_idx = source.index("except OSError", copy_idx)
-    assert try_idx < copy_idx < except_idx, (
-        "shutil.copy2 in the watcher must be inside a try/except OSError"
+def test_notebook_does_not_use_google_drive():
+    # drive.mount() blocks on an interactive OAuth prompt a headless/automated
+    # colab exec session has no way to answer -- confirmed by direct testing
+    # (ledger 2026-08-03), and independently already hit once before by the
+    # sibling lewm-jamba project (COLAB_RUNBOOK.md, 2026-07-30). Worse than a
+    # clean failure: if drive.mount() never completes, /content/drive/... is
+    # just an ordinary path on the VM's own ephemeral disk, so code that
+    # writes there "succeeds" with no error while silently producing a second
+    # local-only copy that dies with the VM exactly like the original. The
+    # durable store is unnat-brain/bin/colab-pull-ckpt.sh, run externally.
+    # Only code cells matter here -- the title cell's markdown explains, in
+    # prose, why drive.mount() specifically isn't used, which legitimately
+    # mentions the string "drive.mount()".
+    code_source = "\n".join(
+        cell["source"] for cell in build_notebook()["cells"] if cell["cell_type"] == "code"
     )
+    assert "drive.mount(" not in code_source
+    assert "google.colab import drive" not in code_source
+    assert "DRIVE_CHECKPOINT_DIR" not in code_source
+    assert "DRIVE_DATA_DIR" not in code_source
 
 
-def test_notebook_restores_checkpoints_from_drive_before_starting_a_stage():
-    # A fresh session's local checkpoint dir is always empty (fresh clone).
-    # Without restoring from Drive first, train/*.py's auto-resume (which only
-    # checks the local dir for last.ckpt) would silently restart every stage
-    # from step 0 on every session death, even though Drive has the progress.
+def test_notebook_documents_the_external_pull_based_checkpoint_story():
+    # There's no in-notebook checkpoint-sync code anymore (see
+    # test_notebook_does_not_use_google_drive) -- the durable copy comes from
+    # running colab-pull-ckpt.sh against this session from outside the VM.
+    # The notebook must at least point at that, or a reader has no way to
+    # know checkpoints aren't otherwise going anywhere durable.
     source = "\n".join(cell["source"] for cell in build_notebook()["cells"])
-    restore_idx = source.index("Restored checkpoints from Drive")
-    copytree_idx = source.rindex("shutil.copytree(drive_src, watch_dir", 0, restore_idx + 200)
-    start_stage_idx = source.index('proc = subprocess.Popen(\n        ["python", "-u", script,')
-    assert copytree_idx < start_stage_idx, (
-        "checkpoints must be restored from Drive before the training subprocess starts"
-    )
-
-
-def test_notebook_restores_dataset_from_drive_instead_of_always_redownloading():
-    # Re-downloading ~20GB from Kaggle on every session death (expected, not
-    # rare, given the ~1.5-2hr session lifetime) burns a large chunk of each
-    # new session's short lifetime before training can even resume.
-    source = "\n".join(cell["source"] for cell in build_notebook()["cells"])
-    assert "DRIVE_DATA_DIR" in source
-    assert "drive_train_dir" in source
-    restore_idx = source.index("Restoring dataset from Drive")
-    download_idx = source.index('["bash", "scripts/download_data.sh"')
-    assert restore_idx < download_idx, (
-        "must check for a Drive-persisted dataset before falling back to download_data.sh"
-    )
-
-
-def test_notebook_watcher_resyncs_last_ckpt_when_it_changes_not_just_once():
-    # last.ckpt (save_last=True) is the SAME filename rewritten every
-    # checkpoint interval, not a new file each time. A plain "seen this path
-    # before" set would sync it to Drive exactly once, ever, leaving Drive
-    # with a permanently stale snapshot for the rest of the stage. Sync state
-    # must be keyed on mtime (or something that changes on rewrite), not path.
-    source = "\n".join(cell["source"] for cell in build_notebook()["cells"])
-    assert "_synced_mtime" in source
-    assert "getmtime" in source
+    assert "colab-pull-ckpt.sh" in source
+    assert "last.ckpt" in source
 
 
 def test_main_writes_a_loadable_notebook_file(tmp_path):
@@ -162,4 +142,4 @@ def test_main_writes_a_loadable_notebook_file(tmp_path):
     with open(out_path) as f:
         loaded = nbf.read(f, as_version=4)
     nbf.validate(loaded)
-    assert len(loaded["cells"]) == 12
+    assert len(loaded["cells"]) == 11
