@@ -80,8 +80,10 @@ def main(config_path: str, fast_dev_run: bool = False):
         dataset, batch_size=flat_cfg.batch_size, num_workers=flat_cfg.num_workers,
     )
     # See train/pretrain_mae.py's main() for why this is optional (backward
-    # compat with configs that predate val_batches, e.g. fast_dev_run's
-    # synthetic-data tests).
+    # compat with configs that predate val_batches) AND why num_workers=0 here
+    # specifically (a real production A100 run crashed within minutes of a
+    # persistent-worker val loader doubling the process's total worker count --
+    # see that file's comment for the full story).
     val_loader = None
     val_batches = getattr(cfg.data, "val_batches", None)
     if val_batches is not None:
@@ -90,7 +92,7 @@ def main(config_path: str, fast_dev_run: bool = False):
             val_batches, cfg.data.max_pulses,
         )
         val_loader = build_dataloader(
-            val_dataset, batch_size=flat_cfg.batch_size, num_workers=flat_cfg.num_workers,
+            val_dataset, batch_size=flat_cfg.batch_size, num_workers=0,
         )
     trainer = build_trainer(
         flat_cfg, fast_dev_run=fast_dev_run, run_name=cfg.logging.run_name,

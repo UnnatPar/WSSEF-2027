@@ -117,6 +117,18 @@ def main(config_path: str, fast_dev_run: bool = False):
     # val_batches is optional (older configs / fast_dev_run's synthetic-data
     # tests may not define it) -- skip validation entirely rather than fail,
     # so this stays backward compatible with any config that predates this.
+    #
+    # num_workers=0 deliberately, NOT flat_cfg.num_workers: a persistent-worker
+    # DataLoader (see build_dataloader) holds its workers alive for the whole
+    # run, not just while validation is active. At production scale
+    # (check_val_every_n_epoch=1, ~39k train steps/epoch) validation runs once
+    # every couple hours, so there is no throughput reason to parallelize it --
+    # but reusing num_workers=2 here doubled the process's persistent worker
+    # count (2 train + 2 val, ~4.8GB RSS each observed on a real A100) and
+    # crashed the very first resumed run of this feature within minutes, the
+    # same OOM-killer signature (silent SIGKILL, `resource_tracker: leaked
+    # semaphore objects`) as the original num_workers=8 bug. in-process
+    # (num_workers=0) validation avoids the extra persistent workers entirely.
     val_loader = None
     val_batches = getattr(cfg.data, "val_batches", None)
     if val_batches is not None:
@@ -125,7 +137,7 @@ def main(config_path: str, fast_dev_run: bool = False):
             val_batches, cfg.data.max_pulses,
         )
         val_loader = build_dataloader(
-            val_dataset, batch_size=flat_cfg.batch_size, num_workers=flat_cfg.num_workers,
+            val_dataset, batch_size=flat_cfg.batch_size, num_workers=0,
         )
     trainer = build_trainer(
         flat_cfg, fast_dev_run=fast_dev_run, run_name=cfg.logging.run_name,

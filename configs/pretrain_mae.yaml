@@ -26,8 +26,8 @@ data:
 
 logging:
   project: neutrinojepa
-  run_name: pretrain_mae_v1
+  run_name: pretrain_mae_v2
 
 checkpoint:
-  dirpath: checkpoints/pretrain_mae_v1/
+  dirpath: checkpoints/pretrain_mae_v2/
   filename: "epoch{epoch:04d}-step{step:09d}"
