@@ -10,7 +10,11 @@ training:
   weight_decay: 0.05
   epochs: 100
   grad_clip: 1.0
-  num_workers: 8
+  # 8 gets a dataloader worker SIGKILL'd by the host OOM killer after ~1,560
+  # steps on a real Colab A100 despite ample system RAM at start -- smells
+  # like a per-step leak in the dataloader/worker path, not yet root-caused.
+  # 2 avoided it past step 7,900 on the real production run (2026-08-03).
+  num_workers: 2
 
 data:
   max_pulses: 256
