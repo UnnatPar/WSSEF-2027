@@ -51,7 +51,10 @@ class MAEPretrain(pl.LightningModule):
         self.encoder = PETEncoder(cfg.d, cfg.L, cfg.k)
         self.mae_head = MAEHead(cfg.d)
 
-    def training_step(self, batch, batch_idx):
+    def _step(self, batch):
+        """Shared forward pass for training_step and validation_step -- same
+        masking + reconstruction loss, no dropout/BN in this model so there's
+        nothing else that needs train/eval-mode branching."""
         x, batch_vec = batch.x, batch.batch
         n = x.shape[0]
         mask = uniform_random_mask(n, self.cfg.mask_ratio, device=x.device)
@@ -69,7 +72,24 @@ class MAEPretrain(pl.LightningModule):
         true_tq = x[mask_idx, 3:5]
 
         loss = F.mse_loss(pred_tq, true_tq)
+        return loss, n_events
+
+    def training_step(self, batch, batch_idx):
+        loss, n_events = self._step(batch)
         self.log("train/mae_loss", loss, batch_size=n_events)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        # Held out on the same [595, 627] batch range probe/finetune use as
+        # their own val split (see configs/*.yaml) -- keeps [628, 660]
+        # (eval/run_report.py's test set) untouched throughout the whole
+        # pipeline, not just at the supervised stages. Random masking still
+        # applies here (this model has no other stochasticity to disable),
+        # so val/mae_loss carries the same masking-ratio noise as train/mae_loss
+        # -- useful for spotting divergence between the two curves, not for a
+        # noise-free absolute number.
+        loss, n_events = self._step(batch)
+        self.log("val/mae_loss", loss, batch_size=n_events, on_epoch=True, on_step=False)
         return loss
 
     def configure_optimizers(self):
@@ -94,6 +114,19 @@ def main(config_path: str, fast_dev_run: bool = False):
     loader = build_dataloader(
         dataset, batch_size=flat_cfg.batch_size, num_workers=flat_cfg.num_workers,
     )
+    # val_batches is optional (older configs / fast_dev_run's synthetic-data
+    # tests may not define it) -- skip validation entirely rather than fail,
+    # so this stays backward compatible with any config that predates this.
+    val_loader = None
+    val_batches = getattr(cfg.data, "val_batches", None)
+    if val_batches is not None:
+        val_dataset = build_dataset(
+            cfg.data.batch_dir, cfg.data.geometry_path, cfg.data.meta_path,
+            val_batches, cfg.data.max_pulses,
+        )
+        val_loader = build_dataloader(
+            val_dataset, batch_size=flat_cfg.batch_size, num_workers=flat_cfg.num_workers,
+        )
     trainer = build_trainer(
         flat_cfg, fast_dev_run=fast_dev_run, run_name=cfg.logging.run_name,
         project=cfg.logging.project,
@@ -103,7 +136,7 @@ def main(config_path: str, fast_dev_run: bool = False):
     # build_trainer for why every_n_epochs=1 alone isn't enough for hours-long epochs.
     last_ckpt = os.path.join(cfg.checkpoint.dirpath, "last.ckpt")
     ckpt_path = last_ckpt if os.path.exists(last_ckpt) else None
-    trainer.fit(model, loader, ckpt_path=ckpt_path)
+    trainer.fit(model, loader, val_dataloaders=val_loader, ckpt_path=ckpt_path)
     return trainer
 
 

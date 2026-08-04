@@ -22,6 +22,7 @@ data:
   meta_path: data/train_meta.parquet
   geometry_path: data/sensor_geometry.csv
   train_batches: [1, 50]
+  val_batches: [595, 627]
 
 logging:
   project: neutrinojepa

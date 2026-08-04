@@ -39,6 +39,13 @@ def build_trainer(
         max_epochs=flat_cfg.epochs,
         precision="16-mixed",
         gradient_clip_val=flat_cfg.grad_clip,
+        # Epoch 0 alone runs for hours at production scale, so this mostly
+        # matters for shorter/resumed runs -- but it's the right default
+        # regardless: harmless no-op when main() passes no val_dataloaders
+        # (fast_dev_run / configs without val_batches), and otherwise the
+        # only way to see train/val divergence (overfitting) without waiting
+        # for a full multi-hour epoch to complete.
+        check_val_every_n_epoch=1,
         # Pretrain epochs (10M events / batch_size) run for hours -- far longer
         # than a Colab session tends to survive. Checkpointing only at epoch
         # boundaries (the old every_n_epochs=1) would mean a session death
@@ -72,6 +79,19 @@ def main(config_path: str, fast_dev_run: bool = False):
     loader = build_dataloader(
         dataset, batch_size=flat_cfg.batch_size, num_workers=flat_cfg.num_workers,
     )
+    # See train/pretrain_mae.py's main() for why this is optional (backward
+    # compat with configs that predate val_batches, e.g. fast_dev_run's
+    # synthetic-data tests).
+    val_loader = None
+    val_batches = getattr(cfg.data, "val_batches", None)
+    if val_batches is not None:
+        val_dataset = build_dataset(
+            cfg.data.batch_dir, cfg.data.geometry_path, cfg.data.meta_path,
+            val_batches, cfg.data.max_pulses,
+        )
+        val_loader = build_dataloader(
+            val_dataset, batch_size=flat_cfg.batch_size, num_workers=flat_cfg.num_workers,
+        )
     trainer = build_trainer(
         flat_cfg, fast_dev_run=fast_dev_run, run_name=cfg.logging.run_name,
         project=cfg.logging.project,
@@ -83,7 +103,7 @@ def main(config_path: str, fast_dev_run: bool = False):
     # global step/epoch counters.
     last_ckpt = os.path.join(cfg.checkpoint.dirpath, "last.ckpt")
     ckpt_path = last_ckpt if os.path.exists(last_ckpt) else None
-    trainer.fit(model, loader, ckpt_path=ckpt_path)
+    trainer.fit(model, loader, val_dataloaders=val_loader, ckpt_path=ckpt_path)
     return trainer
 
 

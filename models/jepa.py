@@ -23,7 +23,8 @@ class NeutrinoJEPA(pl.LightningModule):
             nn.Linear(cfg.d + 3, cfg.d), nn.GELU(), nn.Linear(cfg.d, cfg.d)
         )
 
-    def training_step(self, batch, batch_idx):
+    def _step(self, batch):
+        """Shared forward pass for training_step and validation_step."""
         x, batch_vec = batch.x, batch.batch
 
         # PyG batching lays out each event's nodes contiguously (sorted by
@@ -80,8 +81,20 @@ class NeutrinoJEPA(pl.LightningModule):
         pred_n = F.normalize(pred, dim=-1)
         target_n = F.normalize(target, dim=-1)
         loss = 2 - 2 * (pred_n * target_n).sum(-1).mean()
+        return loss, n_events
 
+    def training_step(self, batch, batch_idx):
+        loss, n_events = self._step(batch)
         self.log("train/loss", loss, batch_size=n_events)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        # Lightning disables grad + calls self.eval() around this automatically;
+        # self.ema.average_parameters() below still works the same under
+        # no_grad(). See train/pretrain_mae.py's validation_step for why this
+        # reuses the same [595, 627] range other stages already treat as val.
+        loss, n_events = self._step(batch)
+        self.log("val/loss", loss, batch_size=n_events, on_epoch=True, on_step=False)
         return loss
 
     def on_before_zero_grad(self, optimizer):
