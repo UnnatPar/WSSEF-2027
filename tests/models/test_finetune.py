@@ -135,6 +135,33 @@ def test_training_step_stays_finite_when_kappa_head_saturates_to_zero():
     assert torch.isfinite(loss)
 
 
+def test_direction_head_still_gets_meaningful_gradient_when_kappa_head_collapses():
+    """A second, worse failure the finite-loss test above doesn't catch:
+    measured directly against graphnet's real loss, d(loss)/d(kappa) is
+    POSITIVE whenever direction predictions are still wrong (the normal state
+    at the start of training) -- so gradient descent drives kappa_head's raw
+    output toward zero from step one. Once kappa is near zero, the gradient
+    reaching direction_head collapses ~10,000x (measured: 0.13 at kappa=1.0
+    vs 0.000013 at kappa=1e-4), starving it of signal and freezing bad
+    direction predictions permanently -- which in turn keeps kappa pinned at
+    zero. This is a self-reinforcing collapse, not a numerical edge case: it
+    pinned real production runs at a constant loss for 1.7k+ steps with zero
+    learning. The fix (flooring kappa at 1.0, not just epsilon-above-zero)
+    must guarantee direction_head keeps receiving a non-negligible gradient
+    even when kappa_head's own output has collapsed to ~0."""
+    model = SupervisedFineTune(make_cfg())
+    with torch.no_grad():
+        model.kappa_head[0].weight.zero_()
+        model.kappa_head[0].bias.fill_(-1000.0)  # kappa_head's raw output collapses to 0
+    batch = make_labeled_batch(with_pid=False)
+    loss = model.training_step(batch, batch_idx=0)
+    loss.backward()
+    direction_grad_norm = torch.cat(
+        [p.grad.flatten() for p in model.direction_head.parameters()]
+    ).norm()
+    assert direction_grad_norm > 1e-3
+
+
 def test_validation_step_logs_val_angular_error():
     model = SupervisedFineTune(make_cfg())
     batch = make_labeled_batch(with_pid=False)

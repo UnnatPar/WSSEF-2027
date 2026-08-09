@@ -50,9 +50,22 @@ class SupervisedFineTune(pl.LightningModule):
         # computes log(kappa) - log(iv(0.5, kappa)) = -inf - (-inf) = NaN in
         # floating point, even though the mathematical limit is finite.
         # Verified directly: this NaN'd ~80-100% of steps in a real production
-        # run. A small epsilon floor keeps kappa bounded away from the
-        # singularity regardless of precision.
-        kappa = self.kappa_head(g) + 1e-4
+        # run.
+        #
+        # A tiny epsilon (1e-4) stops the NaN but not a second, worse failure:
+        # verified by direct gradient measurement, d(loss)/d(kappa) is
+        # POSITIVE whenever direction predictions are still wrong (as they are
+        # at the start of training), so gradient descent pushes kappa toward
+        # zero from step one. Once kappa is near zero, the gradient reaching
+        # direction_head collapses ~10,000x (measured: 0.131887 at kappa=1.0
+        # vs 0.000013 at kappa=1e-4), so direction predictions can never
+        # improve -- a self-reinforcing collapse that pinned real production
+        # runs at a constant loss (~2.531, the kappa->0 asymptote) for
+        # thousands of steps with zero learning. Flooring at 1.0 keeps enough
+        # gradient flowing to direction_head to escape the trap; once
+        # predictions are good enough that d(loss)/d(kappa) turns negative,
+        # kappa is free to grow past the floor on its own.
+        kappa = self.kappa_head(g) + 1.0
         return g, az, zen, kappa
 
     def _compute_loss(self, batch, g, az, zen, kappa):
