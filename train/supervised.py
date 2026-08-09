@@ -64,7 +64,13 @@ def run_supervised(
         ))
 
     kwargs = dict(
-        max_epochs=flat_cfg.epochs, precision="16-mixed",
+        max_epochs=flat_cfg.epochs,
+        # See train/pretrain.py's build_trainer for the full story: fp16
+        # ("16-mixed") verified by direct A/B overfit test to corrupt
+        # gradients badly enough to turn clean monotonic loss descent into
+        # noisy near-flat fluctuation, for this model specifically. bf16 fixed
+        # it completely at no throughput cost on A100.
+        precision="bf16-mixed",
         gradient_clip_val=flat_cfg.grad_clip, callbacks=callbacks,
     )
     if fast_dev_run:
