@@ -128,8 +128,8 @@ def test_training_step_stays_finite_when_kappa_head_saturates_to_zero():
     floating point, even though the mathematical limit is finite."""
     model = SupervisedFineTune(make_cfg())
     with torch.no_grad():
-        model.kappa_head[0].weight.zero_()
-        model.kappa_head[0].bias.fill_(-1000.0)  # forces Softplus(x) == 0.0 exactly
+        model.kappa_head.weight.zero_()
+        model.kappa_head.bias.fill_(-1000.0)  # forces Softplus(x) == 0.0 exactly
     batch = make_labeled_batch(with_pid=False)
     loss = model.training_step(batch, batch_idx=0)
     assert torch.isfinite(loss)
@@ -151,8 +151,8 @@ def test_direction_head_still_gets_meaningful_gradient_when_kappa_head_collapses
     even when kappa_head's own output has collapsed to ~0."""
     model = SupervisedFineTune(make_cfg())
     with torch.no_grad():
-        model.kappa_head[0].weight.zero_()
-        model.kappa_head[0].bias.fill_(-1000.0)  # kappa_head's raw output collapses to 0
+        model.kappa_head.weight.zero_()
+        model.kappa_head.bias.fill_(-1000.0)  # kappa_head's raw output collapses to 0
     batch = make_labeled_batch(with_pid=False)
     loss = model.training_step(batch, batch_idx=0)
     loss.backward()
@@ -160,6 +160,31 @@ def test_direction_head_still_gets_meaningful_gradient_when_kappa_head_collapses
         [p.grad.flatten() for p in model.direction_head.parameters()]
     ).norm()
     assert direction_grad_norm > 1e-3
+
+
+def test_kappa_head_gradient_survives_even_when_its_own_output_has_saturated():
+    """A third failure, discovered after fixing the first two: flooring
+    kappa's *value* at 1.0 stops the collapse, but plain Softplus's own
+    gradient (sigmoid of the pre-activation) still underflows to exactly 0.0
+    once the optimizer -- which still wants to push kappa down whenever
+    direction predictions are imperfect -- drives kappa_head's pre-activation
+    far enough negative. Verified by direct step-by-step tracing on a real
+    batch: kappa_grad_norm hit exactly 0.0 by step 20 of a real overfit run
+    and never recovered, permanently dead-neuroning kappa_head regardless of
+    how training proceeded afterward. The leak term (LeakyReLU-style) must
+    keep a nonzero gradient flowing into kappa_head no matter how negative
+    its pre-activation gets."""
+    model = SupervisedFineTune(make_cfg())
+    with torch.no_grad():
+        model.kappa_head.weight.zero_()
+        model.kappa_head.bias.fill_(-1000.0)
+    batch = make_labeled_batch(with_pid=False)
+    loss = model.training_step(batch, batch_idx=0)
+    loss.backward()
+    kappa_grad_norm = torch.cat(
+        [p.grad.flatten() for p in model.kappa_head.parameters()]
+    ).norm()
+    assert kappa_grad_norm > 0
 
 
 def test_validation_step_logs_val_angular_error():

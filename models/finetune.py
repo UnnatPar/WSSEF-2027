@@ -33,7 +33,7 @@ class SupervisedFineTune(pl.LightningModule):
         self.encoder = PETEncoder(cfg.d, cfg.L, cfg.k)
         self.direction_head = DirectionHead(cfg.d)
         self.classification_head = ClassificationHead(cfg.d)
-        self.kappa_head = nn.Sequential(nn.Linear(cfg.d, 1), nn.Softplus())
+        self.kappa_head = nn.Linear(cfg.d, 1)
         self.direction_loss_fn = VonMisesFisher3DLoss()
 
         if cfg.freeze_encoder:
@@ -52,20 +52,32 @@ class SupervisedFineTune(pl.LightningModule):
         # Verified directly: this NaN'd ~80-100% of steps in a real production
         # run.
         #
-        # A tiny epsilon (1e-4) stops the NaN but not a second, worse failure:
-        # verified by direct gradient measurement, d(loss)/d(kappa) is
-        # POSITIVE whenever direction predictions are still wrong (as they are
-        # at the start of training), so gradient descent pushes kappa toward
-        # zero from step one. Once kappa is near zero, the gradient reaching
-        # direction_head collapses ~10,000x (measured: 0.131887 at kappa=1.0
-        # vs 0.000013 at kappa=1e-4), so direction predictions can never
-        # improve -- a self-reinforcing collapse that pinned real production
-        # runs at a constant loss (~2.531, the kappa->0 asymptote) for
-        # thousands of steps with zero learning. Flooring at 1.0 keeps enough
-        # gradient flowing to direction_head to escape the trap; once
-        # predictions are good enough that d(loss)/d(kappa) turns negative,
-        # kappa is free to grow past the floor on its own.
-        kappa = self.kappa_head(g) + 1.0
+        # A tiny epsilon (1e-4) stopped the NaN but not a second, worse
+        # failure: verified by direct gradient measurement, d(loss)/d(kappa)
+        # is POSITIVE whenever direction predictions are still wrong (as they
+        # are at the start of training), so gradient descent pushes kappa
+        # toward zero from step one. Once kappa is near zero, the gradient
+        # reaching direction_head collapses ~10,000x (measured: 0.131887 at
+        # kappa=1.0 vs 0.000013 at kappa=1e-4) -- a self-reinforcing collapse
+        # that pinned real production runs at a constant loss for thousands
+        # of steps with zero learning.
+        #
+        # Flooring the *value* at 1.0 stops that, but doesn't stop a third
+        # failure: plain Softplus's own gradient (sigmoid of the
+        # pre-activation) also underflows to exactly 0.0 once the optimizer
+        # -- which still wants to push kappa down, floor or not -- drives the
+        # pre-activation far enough negative. Verified by direct step-by-step
+        # tracing on a real batch: kappa_grad_norm hits exactly 0.0 by step 20
+        # and never recovers, permanently dead-neuroning kappa_head at the
+        # floor value regardless of how training proceeds afterward. The leak
+        # term below (a LeakyReLU-style fix for the same dying-neuron
+        # mechanism) keeps a tiny but nonzero gradient flowing no matter how
+        # negative the pre-activation gets, while being numerically identical
+        # to plain Softplus everywhere in the normal operating range
+        # (verified: diff <= 0.005 for pre-activations in [-5, 5], exactly 0
+        # for pre-activations >= 0).
+        kappa_raw = self.kappa_head(g)
+        kappa = F.softplus(kappa_raw) + 1e-3 * F.relu(-kappa_raw) + 1.0
         return g, az, zen, kappa
 
     def _compute_loss(self, batch, g, az, zen, kappa):
