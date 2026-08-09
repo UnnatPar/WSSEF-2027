@@ -3,7 +3,7 @@ import os
 
 
 def latest_checkpoint(dirpath: str) -> str:
-    """Returns the most recent *.ckpt file in dirpath.
+    """Returns the most recently WRITTEN *.ckpt file in dirpath (by mtime).
 
     Used instead of hardcoding a specific epoch filename (e.g. "epoch99.ckpt")
     in configs: a real Colab run can be interrupted by session limits or
@@ -12,24 +12,23 @@ def latest_checkpoint(dirpath: str) -> str:
     it even starts. Resolving "whatever's actually there" at runtime instead
     means partial pretraining runs still produce usable checkpoints.
 
-    Training uses time-interval checkpointing (every 15 min, not per-epoch --
-    a real epoch can run for hours) plus `save_last=True`, which writes a
-    `last.ckpt` alongside the numbered file at every save. `last.ckpt` is
-    always at least as recent as the numbered file, but has no digits in its
-    name -- prefer it explicitly rather than falling through to the epoch/step
-    sort below, which would otherwise pick a numbered checkpoint that's stale
-    by up to one checkpoint interval.
+    Previously this preferred a literal "last.ckpt" by name, on the
+    assumption that save_last=True keeps it at least as recent as any
+    numbered file. That assumption is false in a real, reproduced scenario:
+    a checkpoint dir seeded with an old "last.ckpt" (e.g. manually uploaded
+    to resume a session) can make Lightning detect a naming collision with
+    the *current* run's own last-checkpoint tracking and write "last-v1.ckpt"
+    instead of overwriting it -- silently leaving the seeded, stale
+    "last.ckpt" in place while real training moves on. Verified directly: a
+    production run reached step 147,454 while "last.ckpt" still pointed at
+    the step-8,154 seed checkpoint from ~139k steps earlier (confirmed by
+    md5: "last-v1.ckpt" matched the numbered step-147454 file exactly,
+    "last.ckpt" did not) -- name-based preference would have silently loaded
+    the wrong, far-less-trained encoder into every probe/finetune run.
+    mtime is the actual ground truth for "most recently written" and isn't
+    fooled by any naming/versioning quirk.
     """
-    last_ckpt = os.path.join(dirpath, "last.ckpt")
-    if os.path.exists(last_ckpt):
-        return last_ckpt
-
     files = glob.glob(os.path.join(dirpath, "*.ckpt"))
     if not files:
         raise FileNotFoundError(f"no checkpoints found in {dirpath}")
-
-    def epoch_num(path: str) -> int:
-        digits = "".join(c for c in os.path.basename(path) if c.isdigit())
-        return int(digits) if digits else -1
-
-    return max(files, key=epoch_num)
+    return max(files, key=os.path.getmtime)

@@ -13,6 +13,7 @@ from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import WandbLogger
 
 from models.jepa import NeutrinoJEPA
+from train.checkpoints import latest_checkpoint
 from train.config import flatten_sections, load_config
 from train.dataset import build_dataloader, build_dataset
 
@@ -114,10 +115,16 @@ def main(config_path: str, fast_dev_run: bool = False):
     )
     # Auto-resume: a fresh Colab session re-running this exact command should
     # continue from wherever the last session's ModelCheckpoint left off, not
-    # restart from step 0 -- last.ckpt restores model, optimizer, and the
-    # global step/epoch counters.
-    last_ckpt = os.path.join(cfg.checkpoint.dirpath, "last.ckpt")
-    ckpt_path = last_ckpt if os.path.exists(last_ckpt) else None
+    # restart from step 0 -- restores model, optimizer, and the global
+    # step/epoch counters. Uses latest_checkpoint() (mtime-based), NOT a
+    # hardcoded "last.ckpt" check -- see train/checkpoints.py for why a
+    # literal "last.ckpt" can go stale (verified in a real production run:
+    # Lightning wrote "last-v1.ckpt" instead of overwriting a pre-existing
+    # seeded "last.ckpt", silently leaving it ~139k steps behind).
+    try:
+        ckpt_path = latest_checkpoint(cfg.checkpoint.dirpath)
+    except FileNotFoundError:
+        ckpt_path = None
     trainer.fit(model, loader, val_dataloaders=val_loader, ckpt_path=ckpt_path)
     return trainer
 

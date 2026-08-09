@@ -1,4 +1,3 @@
-import os
 from datetime import timedelta
 
 import lightning as pl
@@ -86,8 +85,13 @@ def run_supervised(
             CSVLogger(save_dir=cfg.checkpoint.dirpath, name="", version=""),
         ]
     trainer = pl.Trainer(**kwargs)
-    # Auto-resume from a prior session's last checkpoint in this same run's dir.
-    last_ckpt = os.path.join(cfg.checkpoint.dirpath, "last.ckpt")
-    ckpt_path = last_ckpt if os.path.exists(last_ckpt) else None
+    # Auto-resume from a prior session's last checkpoint in this same run's
+    # dir. Uses latest_checkpoint() (mtime-based), not a hardcoded "last.ckpt"
+    # check -- see train/checkpoints.py for why a literal "last.ckpt" can go
+    # stale.
+    try:
+        ckpt_path = latest_checkpoint(cfg.checkpoint.dirpath)
+    except FileNotFoundError:
+        ckpt_path = None
     trainer.fit(model, train_loader, val_loader, ckpt_path=ckpt_path)
     return trainer

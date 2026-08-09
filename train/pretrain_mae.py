@@ -18,6 +18,7 @@ import torch.nn.functional as F
 
 from models.heads import MAEHead
 from models.pet import PETEncoder
+from train.checkpoints import latest_checkpoint
 from train.config import flatten_sections, load_config
 from train.dataset import build_dataloader, build_dataset
 from train.pretrain import build_trainer
@@ -146,8 +147,14 @@ def main(config_path: str, fast_dev_run: bool = False):
     )
     # Auto-resume from a prior session's last checkpoint -- see train/pretrain.py's
     # build_trainer for why every_n_epochs=1 alone isn't enough for hours-long epochs.
-    last_ckpt = os.path.join(cfg.checkpoint.dirpath, "last.ckpt")
-    ckpt_path = last_ckpt if os.path.exists(last_ckpt) else None
+    # Uses latest_checkpoint() (mtime-based), not a hardcoded "last.ckpt"
+    # check -- see train/checkpoints.py for why a literal "last.ckpt" can go
+    # stale (verified in this exact checkpoint dir: Lightning wrote
+    # "last-v1.ckpt" instead of overwriting a pre-existing seeded "last.ckpt").
+    try:
+        ckpt_path = latest_checkpoint(cfg.checkpoint.dirpath)
+    except FileNotFoundError:
+        ckpt_path = None
     trainer.fit(model, loader, val_dataloaders=val_loader, ckpt_path=ckpt_path)
     return trainer
 
