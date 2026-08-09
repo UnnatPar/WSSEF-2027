@@ -117,6 +117,24 @@ def test_load_full_checkpoint_restores_heads_not_just_encoder(tmp_path):
     assert not loaded.training
 
 
+def test_training_step_stays_finite_when_kappa_head_saturates_to_zero():
+    """Real production run: `train/loss` was NaN on ~80-100% of logged steps.
+    Root cause -- reproduced directly against graphnet's VonMisesFisher3DLoss,
+    not assumed: kappa_head's Softplus output underflows to exactly 0.0 for a
+    sufficiently negative pre-activation (this is much easier to hit than it
+    sounds under `precision="16-mixed"`, since fp16's subnormal floor is
+    ~6e-8 vs fp32's ~1e-38). At kappa=0.0 exactly, graphnet's LogCMK.forward
+    computes `log(kappa) - log(iv(0.5, kappa))` = -inf - (-inf) = NaN in
+    floating point, even though the mathematical limit is finite."""
+    model = SupervisedFineTune(make_cfg())
+    with torch.no_grad():
+        model.kappa_head[0].weight.zero_()
+        model.kappa_head[0].bias.fill_(-1000.0)  # forces Softplus(x) == 0.0 exactly
+    batch = make_labeled_batch(with_pid=False)
+    loss = model.training_step(batch, batch_idx=0)
+    assert torch.isfinite(loss)
+
+
 def test_validation_step_logs_val_angular_error():
     model = SupervisedFineTune(make_cfg())
     batch = make_labeled_batch(with_pid=False)

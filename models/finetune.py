@@ -43,7 +43,16 @@ class SupervisedFineTune(pl.LightningModule):
     def _forward(self, batch, batch_size: int | None = None):
         g = self.encoder.encode_event(batch.x, batch.batch, batch_size=batch_size)
         az, zen = self.direction_head(g)
-        kappa = self.kappa_head(g)
+        # Softplus(x) underflows to exactly 0.0 for a sufficiently negative
+        # pre-activation -- easier to hit than it sounds under precision=
+        # "16-mixed" AMP, since fp16's subnormal floor (~6e-8) is much higher
+        # than fp32's (~1e-38). At kappa=0.0 exactly, graphnet's LogCMK.forward
+        # computes log(kappa) - log(iv(0.5, kappa)) = -inf - (-inf) = NaN in
+        # floating point, even though the mathematical limit is finite.
+        # Verified directly: this NaN'd ~80-100% of steps in a real production
+        # run. A small epsilon floor keeps kappa bounded away from the
+        # singularity regardless of precision.
+        kappa = self.kappa_head(g) + 1e-4
         return g, az, zen, kappa
 
     def _compute_loss(self, batch, g, az, zen, kappa):

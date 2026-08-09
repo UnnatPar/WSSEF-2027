@@ -77,7 +77,7 @@ def test_finetune_and_scratch_configs_do_not_freeze_encoder():
 
 def test_probe_and_finetune_configs_point_at_the_right_pretrain_checkpoint():
     jepa_source = "pretrain_jepa_v1"
-    mae_source = "pretrain_mae_v1"
+    mae_source = "pretrain_mae_v2"  # v1 was the abandoned Colab run; v2 is the real one
     for name in ["probe_jepa.yaml", "finetune_jepa.yaml"]:
         cfg = load_config(f"configs/{name}")
         assert jepa_source in cfg.model.checkpoint, f"{name} should point at a {jepa_source} checkpoint"
