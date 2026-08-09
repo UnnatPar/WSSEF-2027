@@ -15,7 +15,11 @@ __all__ = ["build_probe_model", "main"]
 
 
 def main(config_path: str, fast_dev_run: bool = False):
-    return run_supervised(config_path, fast_dev_run, early_stopping=False)
+    # Early stopping was originally off here on the assumption that probing a
+    # frozen encoder is cheap -- it isn't: the forward pass still runs the
+    # full 5.7M-param encoder every step, so a fixed 30-epoch schedule costs
+    # real A100 hours (~59hr measured on this run) same as full finetuning.
+    return run_supervised(config_path, fast_dev_run, early_stopping=True)
 
 
 if __name__ == "__main__":

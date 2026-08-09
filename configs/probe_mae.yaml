@@ -15,6 +15,7 @@ training:
   num_workers: 4
   lambda_direction: 1.0
   lambda_classification: 0.5
+  early_stopping_patience: 5
 
 data:
   max_pulses: 256
