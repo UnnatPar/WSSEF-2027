@@ -124,6 +124,47 @@ def test_lr_schedule_total_steps_survives_a_resume_with_a_smaller_epoch_budget()
     assert lr_with_small_schedule < 1e-3 * 0.1
 
 
+class _FakeTrainer:
+    """Minimal stand-in exposing exactly what configure_optimizers reads."""
+
+    def __init__(self, global_step, estimated_stepping_batches):
+        self.global_step = global_step
+        self.estimated_stepping_batches = estimated_stepping_batches
+
+
+def test_lr_reflects_trainer_global_step_not_the_schedulers_own_counter():
+    """A second, deeper problem the LambdaLR fix above doesn't cover on its
+    own: checked directly against the same real checkpoint, the scheduler's
+    own step counter did NOT track true cumulative progress across
+    resumes -- global_step was 191,885 but the scheduler's own last_epoch
+    was only 12,501 (steps since that particular process's scheduler object
+    was constructed, not since training began). Relying on the `step`
+    argument LambdaLR passes its lambda -- or on .step() call counts at
+    all -- inherits this same disconnect. trainer.global_step is Lightning's
+    single authoritative counter, saved as its own top-level checkpoint key
+    and correctly continued across every resume regardless of any
+    scheduler-internal bookkeeping. This test proves the lambda tracks
+    global_step directly: with the scheduler's own counter frozen at 0
+    (zero .step() calls made), just mutating global_step externally (as a
+    real resume effectively does) must still move the LR."""
+    model = MAEPretrain(make_flat_cfg())
+    model.trainer = _FakeTrainer(global_step=0, estimated_stepping_batches=1000)
+    result = model.configure_optimizers()
+    optimizer, scheduler = result["optimizer"], result["lr_scheduler"]["scheduler"]
+
+    lr_at_step_0 = optimizer.param_groups[0]["lr"]
+
+    # Simulate a resume landing deep into the schedule -- mutate global_step
+    # directly, WITHOUT ever calling scheduler.step(), exactly like a real
+    # resume where the scheduler object is freshly constructed but
+    # trainer.global_step already reflects real prior progress.
+    model.trainer.global_step = 900
+    scheduler.step()  # triggers one recomputation using the lambda
+    lr_after_resume = optimizer.param_groups[0]["lr"]
+
+    assert lr_after_resume < lr_at_step_0 * 0.1  # deep into decay, not still ~full LR
+
+
 def test_checkpoint_dirpath_and_filename_are_configurable(tmp_path):
     cfg = make_flat_cfg()
     trainer = build_trainer(

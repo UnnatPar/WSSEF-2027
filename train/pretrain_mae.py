@@ -114,19 +114,28 @@ class MAEPretrain(pl.LightningModule):
         # state_dict, including T_max, clobbering a freshly-computed T_max
         # right after construction -- an epochs config change (100 -> 8) had
         # zero effect on a resumed run because the checkpoint's stale
-        # T_max=3,906,300 silently won every time. LambdaLR's state_dict
-        # excludes the lambda closure (only `last_epoch`/step count are
-        # restored), so `total_steps` below is captured fresh from the
-        # current run's config every time and can never be overwritten by
-        # an old checkpoint -- while the step counter itself still resumes
-        # correctly, so there's no jump in LR across a resume.
+        # T_max=3,906,300 silently won every time.
+        #
+        # The lambda ignores the `step` argument LambdaLR passes it and
+        # reads self.trainer.global_step instead -- verified directly
+        # against the same checkpoint that the scheduler's own internal
+        # counter does NOT reliably track true cumulative progress across
+        # resumes either: global_step was 191,885 but the scheduler's own
+        # last_epoch was only 12,501 (steps since that particular process's
+        # scheduler was constructed, not since training began).
+        # trainer.global_step is Lightning's single authoritative counter,
+        # saved as its own top-level checkpoint key and correctly continued
+        # across every resume regardless of any scheduler-internal
+        # bookkeeping -- so computing progress from it directly is immune to
+        # both failure modes at once (stale T_max AND a disconnected step
+        # counter), not just the first one.
         optimizer = torch.optim.AdamW(
             self.parameters(), lr=self.cfg.lr, weight_decay=self.cfg.weight_decay,
         )
         total_steps = self.trainer.estimated_stepping_batches
 
-        def lr_lambda(step):
-            progress = min(step / total_steps, 1.0)
+        def lr_lambda(_):
+            progress = min(self.trainer.global_step / total_steps, 1.0)
             return 0.5 * (1 + math.cos(math.pi * progress))
 
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
