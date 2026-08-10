@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import lightning as pl
 import torch
-from lightning.pytorch.callbacks import ModelCheckpoint
+from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
 from lightning.pytorch.loggers import WandbLogger
 
 from models.jepa import NeutrinoJEPA
@@ -67,11 +67,18 @@ def build_trainer(
         # clock instead, so a killed session never loses more than ~15 min of
         # work; save_last=True always keeps a stable "last.ckpt" pointer for
         # resume regardless of which of the last save_top_k files that is.
-        callbacks=[ModelCheckpoint(
-            dirpath=checkpoint_dirpath, filename=checkpoint_filename,
-            every_n_epochs=0, train_time_interval=timedelta(minutes=15),
-            save_top_k=1, save_last=True,
-        )],
+        # LearningRateMonitor logs the actual live LR to wandb every step --
+        # added after several rounds of checkpoint-file archaeology to
+        # verify the LR schedule was doing what it should; direct, live
+        # visibility avoids repeating that.
+        callbacks=[
+            ModelCheckpoint(
+                dirpath=checkpoint_dirpath, filename=checkpoint_filename,
+                every_n_epochs=0, train_time_interval=timedelta(minutes=15),
+                save_top_k=1, save_last=True,
+            ),
+            LearningRateMonitor(logging_interval="step"),
+        ],
     )
     if fast_dev_run:
         kwargs["fast_dev_run"] = True
