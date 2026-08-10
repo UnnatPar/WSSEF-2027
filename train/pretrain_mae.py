@@ -22,6 +22,7 @@ from models.pet import PETEncoder
 from train.checkpoints import latest_checkpoint
 from train.config import flatten_sections, load_config
 from train.dataset import build_dataloader, build_dataset
+from train.optim import make_param_groups
 from train.pretrain import build_trainer
 
 
@@ -129,8 +130,21 @@ class MAEPretrain(pl.LightningModule):
         # bookkeeping -- so computing progress from it directly is immune to
         # both failure modes at once (stale T_max AND a disconnected step
         # counter), not just the first one.
+        # make_param_groups, NOT plain self.parameters(): the actual root
+        # cause of the plateau above, found after this LR-schedule fix
+        # alone didn't move val loss at all. Verified directly against a
+        # real trained checkpoint (step 39,064): every LayerNorm's gain had
+        # decayed to ~0.144, an almost exact match for
+        # exp(-lr*weight_decay*steps) -- i.e. weight decay was applied to
+        # LayerNorm's gain with essentially zero opposing gradient, and
+        # nothing was stopping it. As gain -> 0, LayerNorm(x) -> its bias
+        # regardless of x; chained across 6 blocks this collapsed the whole
+        # encoder to a near-input-independent output (measured: node
+        # embedding cross-sample std ~0.0002 for 10,810 real, physically
+        # diverse pulses -- masked AND unmasked alike, and even with no
+        # masking applied at all). See train/optim.py for the full story.
         optimizer = torch.optim.AdamW(
-            self.parameters(), lr=self.cfg.lr, weight_decay=self.cfg.weight_decay,
+            make_param_groups(self, lr=self.cfg.lr, weight_decay=self.cfg.weight_decay),
         )
         total_steps = self.trainer.estimated_stepping_batches
 

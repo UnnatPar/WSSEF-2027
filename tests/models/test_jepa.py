@@ -15,6 +15,24 @@ def make_cfg(**overrides):
     return SimpleNamespace(**base)
 
 
+class _FakeTrainer:
+    """Minimal stand-in exposing exactly what configure_optimizers reads --
+    see train/pretrain_mae.py's test_pretrain_mae_smoke.py for why this is
+    necessary: configure_optimizers now reads self.trainer.global_step and
+    self.trainer.estimated_stepping_batches directly, not a scheduler's own
+    internal step counter."""
+
+    def __init__(self, global_step=0, estimated_stepping_batches=1000):
+        self.global_step = global_step
+        self.estimated_stepping_batches = estimated_stepping_batches
+
+
+def make_model_with_fake_trainer(**cfg_overrides):
+    model = NeutrinoJEPA(make_cfg(**cfg_overrides))
+    model.trainer = _FakeTrainer()
+    return model
+
+
 def test_training_step_returns_finite_scalar_loss(tiny_pyg_batch):
     model = NeutrinoJEPA(make_cfg())
     loss = model.training_step(tiny_pyg_batch, batch_idx=0)
@@ -39,9 +57,14 @@ def test_no_target_encoder_attribute():
 
 
 def test_ema_update_changes_shadow_params(tiny_pyg_batch):
-    model = NeutrinoJEPA(make_cfg())
+    model = make_model_with_fake_trainer()
     before = [p.clone() for p in model.ema.shadow_params]
-    optimizer = model.configure_optimizers()[0][0]
+    optimizer = model.configure_optimizers()["optimizer"]
+    # configure_optimizers needs self.trainer; training_step's self.log()
+    # call needs it to be either fully Lightning-real or unset (our fake
+    # stub only satisfies configure_optimizers' two attributes) -- unset it
+    # now that the optimizer is built.
+    model.trainer = None
     loss = model.training_step(tiny_pyg_batch, batch_idx=0)
     loss.backward()
     optimizer.step()
@@ -51,8 +74,9 @@ def test_ema_update_changes_shadow_params(tiny_pyg_batch):
 
 
 def test_checkpoint_roundtrip_preserves_ema_state(tiny_pyg_batch):
-    model = NeutrinoJEPA(make_cfg())
-    optimizer = model.configure_optimizers()[0][0]
+    model = make_model_with_fake_trainer()
+    optimizer = model.configure_optimizers()["optimizer"]
+    model.trainer = None  # see test_ema_update_changes_shadow_params
     loss = model.training_step(tiny_pyg_batch, batch_idx=0)
     loss.backward()
     optimizer.step()
@@ -68,11 +92,32 @@ def test_checkpoint_roundtrip_preserves_ema_state(tiny_pyg_batch):
         assert torch.equal(original, loaded)
 
 
-def test_configure_optimizers_returns_adamw_and_cosine_scheduler():
-    model = NeutrinoJEPA(make_cfg())
-    optimizers, schedulers = model.configure_optimizers()
-    assert isinstance(optimizers[0], torch.optim.AdamW)
-    assert isinstance(schedulers[0], torch.optim.lr_scheduler.CosineAnnealingLR)
+def test_configure_optimizers_returns_adamw_and_decaying_schedule():
+    model = make_model_with_fake_trainer()
+    result = model.configure_optimizers()
+    assert isinstance(result["optimizer"], torch.optim.AdamW)
+    assert isinstance(result["lr_scheduler"]["scheduler"], torch.optim.lr_scheduler.LambdaLR)
+    assert result["lr_scheduler"]["interval"] == "step"
+
+
+def test_lr_reflects_trainer_global_step_not_the_schedulers_own_counter():
+    """Same mechanism/test pattern as train/pretrain_mae.py's
+    MAEPretrain -- see that file's configure_optimizers for the full
+    reasoning. Proves the lambda tracks global_step directly: with the
+    scheduler's own counter frozen at 0 (zero .step() calls made), just
+    mutating global_step externally (as a real resume effectively does)
+    must still move the LR."""
+    model = make_model_with_fake_trainer(estimated_stepping_batches=1000)
+    result = model.configure_optimizers()
+    optimizer, scheduler = result["optimizer"], result["lr_scheduler"]["scheduler"]
+
+    lr_at_step_0 = optimizer.param_groups[0]["lr"]
+
+    model.trainer.global_step = 900
+    scheduler.step()
+    lr_after_resume = optimizer.param_groups[0]["lr"]
+
+    assert lr_after_resume < lr_at_step_0 * 0.1
 
 
 def test_encoder_registered_under_encoder_attribute_for_checkpoint_loading():

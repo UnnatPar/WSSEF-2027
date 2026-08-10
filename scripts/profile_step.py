@@ -55,10 +55,25 @@ def bench(name, model, opt, step_fn, n_warmup=5, n_steps=40):
     del it, loader
 
 
+class _FakeTrainer:
+    """MAEPretrain/NeutrinoJEPA's configure_optimizers now reads
+    self.trainer.global_step and self.trainer.estimated_stepping_batches
+    directly (see train/pretrain_mae.py's configure_optimizers for why:
+    a real production LR schedule bug, fixed this way). This script only
+    benchmarks raw training_step throughput via the optimizer, not through
+    a real Lightning Trainer, so it needs a minimal stand-in."""
+
+    def __init__(self):
+        self.global_step = 0
+        self.estimated_stepping_batches = 100_000
+        self.barebones = False  # checked by Lightning's self.log(), called in training_step
+
+
 if __name__ == "__main__":
     mae_cfg = SimpleNamespace(d=256, L=6, k=8, mask_ratio=0.25, lr=1e-3, weight_decay=0.01)
     mae_model = MAEPretrain(mae_cfg).to(device)
-    mae_opt = mae_model.configure_optimizers()
+    mae_model.trainer = _FakeTrainer()
+    mae_opt = mae_model.configure_optimizers()["optimizer"]
     bench("MAE pretrain", mae_model, mae_opt, lambda m, b: m.training_step(b, 0))
 
     jepa_cfg = SimpleNamespace(
@@ -66,5 +81,6 @@ if __name__ == "__main__":
         n_clusters=4, lr=1e-3, weight_decay=0.01, epochs=100,
     )
     jepa_model = NeutrinoJEPA(jepa_cfg).to(device)
-    jepa_opt = jepa_model.configure_optimizers()[0][0]
+    jepa_model.trainer = _FakeTrainer()
+    jepa_opt = jepa_model.configure_optimizers()["optimizer"]
     bench("JEPA pretrain", jepa_model, jepa_opt, lambda m, b: m.training_step(b, 0))

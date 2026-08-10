@@ -21,9 +21,21 @@ dataset = build_dataset(
 loader = build_dataloader(dataset, batch_size=256, num_workers=0)
 it = iter(loader)
 
+class _FakeTrainer:
+    """See scripts/profile_step.py's _FakeTrainer for why this is needed:
+    configure_optimizers now reads self.trainer.global_step and
+    self.trainer.estimated_stepping_batches directly."""
+
+    def __init__(self):
+        self.global_step = 0
+        self.estimated_stepping_batches = 100_000
+        self.barebones = False  # checked by Lightning's self.log(), called in training_step
+
+
 cfg = SimpleNamespace(d=256, L=6, k=8, mask_ratio=0.25, lr=1e-3, weight_decay=0.01)
 model = MAEPretrain(cfg).to(device)
-opt = model.configure_optimizers()
+model.trainer = _FakeTrainer()
+opt = model.configure_optimizers()["optimizer"]
 
 # warmup
 for _ in range(5):

@@ -1,3 +1,4 @@
+import math
 import random
 
 import lightning as pl
@@ -8,6 +9,7 @@ from torch_ema import ExponentialMovingAverage
 
 from data.masking import spatial_cluster_mask
 from models.pet import PETEncoder
+from train.optim import make_param_groups
 
 
 class NeutrinoJEPA(pl.LightningModule):
@@ -125,9 +127,40 @@ class NeutrinoJEPA(pl.LightningModule):
             self.ema.load_state_dict(checkpoint["ema_state"])
 
     def configure_optimizers(self):
+        # LambdaLR reading self.trainer.global_step directly, not
+        # CosineAnnealingLR(T_max=cfg.epochs) with Lightning's default
+        # per-epoch stepping -- same fix as train/pretrain_mae.py's
+        # MAEPretrain.configure_optimizers, applied here proactively before
+        # this experiment's first real run (not yet exercised in production,
+        # unlike MAE pretrain where this exact pattern was confirmed to
+        # silently neuter the LR schedule: T_max=cfg.epochs paired with
+        # multi-hour epochs meant the schedule barely moved across any
+        # realistically observable training window, and a resumed run's
+        # checkpoint-restored scheduler state further clobbered any
+        # config fix). See that file for the full reasoning and empirical
+        # verification of both failure modes.
+        # make_param_groups, NOT plain self.parameters(): PETEncoder-based
+        # models were confirmed to suffer a severe representation collapse
+        # from weight_decay being applied to LayerNorm's gain with no
+        # opposing gradient -- see train/pretrain_mae.py's
+        # configure_optimizers and train/optim.py for the full, precisely
+        # confirmed story (gain decay matched exp(-lr*weight_decay*steps)
+        # almost exactly in a real checkpoint). Applied here proactively
+        # since NeutrinoJEPA shares the same PETEncoder and the same
+        # weight_decay-on-everything pattern, even though this experiment
+        # hasn't run in production yet this session.
         opt = torch.optim.AdamW(
-            self.parameters(), lr=self.cfg.lr, weight_decay=self.cfg.weight_decay,
+            make_param_groups(self, lr=self.cfg.lr, weight_decay=self.cfg.weight_decay),
             betas=(0.9, 0.95),
         )
-        sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=self.cfg.epochs)
-        return [opt], [sched]
+        total_steps = self.trainer.estimated_stepping_batches
+
+        def lr_lambda(_):
+            progress = min(self.trainer.global_step / total_steps, 1.0)
+            return 0.5 * (1 + math.cos(math.pi * progress))
+
+        sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
+        return {
+            "optimizer": opt,
+            "lr_scheduler": {"scheduler": sched, "interval": "step"},
+        }

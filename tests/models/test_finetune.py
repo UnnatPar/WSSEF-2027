@@ -73,12 +73,21 @@ def test_frozen_encoder_has_no_grad_and_optimizer_excludes_it():
     assert optimized_param_ids.isdisjoint(encoder_param_ids)
 
 
-def test_unfrozen_optimizer_has_two_param_groups_with_correct_lrs():
+def test_unfrozen_optimizer_uses_both_lrs_with_decay_split_per_lr():
+    # 4 groups, not 2: each of encoder/heads is further split into
+    # decay/no_decay (see train/optim.py -- LayerNorm's gain must never be
+    # decayed, which is why this split exists at all).
     cfg = make_cfg(freeze_encoder=False)
     model = SupervisedFineTune(cfg)
     optimizer = model.configure_optimizers()
-    lrs = sorted(g["lr"] for g in optimizer.param_groups)
-    assert lrs == sorted([cfg.lr_encoder, cfg.lr_heads])
+    lrs_present = {g["lr"] for g in optimizer.param_groups}
+    assert lrs_present == {cfg.lr_encoder, cfg.lr_heads}
+    for group in optimizer.param_groups:
+        assert group["weight_decay"] in (0.0, cfg.weight_decay)
+    # every group with weight_decay=0.0 must be non-empty and 1D-only
+    no_decay_groups = [g for g in optimizer.param_groups if g["weight_decay"] == 0.0]
+    assert all(len(g["params"]) > 0 for g in no_decay_groups)
+    assert all(p.dim() < 2 for g in no_decay_groups for p in g["params"])
 
 
 def test_build_supervised_model_loads_encoder_weights_from_jepa_checkpoint(tmp_path):

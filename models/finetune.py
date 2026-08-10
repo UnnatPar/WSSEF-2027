@@ -7,6 +7,7 @@ from torch import nn
 from eval.metrics import mean_angular_error, to_cartesian
 from models.heads import ClassificationHead, DirectionHead
 from models.pet import PETEncoder
+from train.optim import split_decay_params
 
 
 class SupervisedFineTune(pl.LightningModule):
@@ -118,19 +119,35 @@ class SupervisedFineTune(pl.LightningModule):
         return loss
 
     def configure_optimizers(self):
-        head_params = (
-            list(self.direction_head.parameters())
-            + list(self.classification_head.parameters())
-            + list(self.kappa_head.parameters())
-        )
+        # split_decay_params, NOT raw .parameters() lists: PETEncoder was
+        # confirmed to suffer a severe representation collapse from
+        # weight_decay being applied to LayerNorm's gain with no opposing
+        # gradient -- see train/pretrain_mae.py's configure_optimizers and
+        # train/optim.py for the full, precisely confirmed story (gain decay
+        # matched exp(-lr*weight_decay*steps) almost exactly in a real
+        # checkpoint). The heads (plain Linear/GELU stacks) don't have
+        # LayerNorms, but excluding their biases from decay too matches
+        # standard practice and costs nothing.
+        head_modules = [self.direction_head, self.classification_head, self.kappa_head]
+        head_decay, head_no_decay = [], []
+        for m in head_modules:
+            d, nd = split_decay_params(m)
+            head_decay += d
+            head_no_decay += nd
+
         if self.cfg.freeze_encoder:
-            return torch.optim.AdamW(
-                head_params, lr=self.cfg.lr_heads, weight_decay=self.cfg.weight_decay,
-            )
+            return torch.optim.AdamW([
+                {"params": head_decay, "lr": self.cfg.lr_heads, "weight_decay": self.cfg.weight_decay},
+                {"params": head_no_decay, "lr": self.cfg.lr_heads, "weight_decay": 0.0},
+            ])
+
+        encoder_decay, encoder_no_decay = split_decay_params(self.encoder)
         return torch.optim.AdamW([
-            {"params": self.encoder.parameters(), "lr": self.cfg.lr_encoder},
-            {"params": head_params, "lr": self.cfg.lr_heads},
-        ], weight_decay=self.cfg.weight_decay)
+            {"params": encoder_decay, "lr": self.cfg.lr_encoder, "weight_decay": self.cfg.weight_decay},
+            {"params": encoder_no_decay, "lr": self.cfg.lr_encoder, "weight_decay": 0.0},
+            {"params": head_decay, "lr": self.cfg.lr_heads, "weight_decay": self.cfg.weight_decay},
+            {"params": head_no_decay, "lr": self.cfg.lr_heads, "weight_decay": 0.0},
+        ])
 
 
 def load_full_checkpoint(cfg, checkpoint_path: str) -> SupervisedFineTune:
