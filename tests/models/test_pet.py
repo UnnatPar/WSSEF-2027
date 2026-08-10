@@ -59,6 +59,33 @@ def test_pet_encoder_gradients_flow(tiny_pyg_batch):
     assert all(p.grad is not None for p in encoder.parameters())
 
 
+def test_edge_mlp_gradient_survives_deeply_negative_pre_activation():
+    """Same failure mode as input_proj (see that test's docstring for the
+    full mechanism), found in a second location by checking every ReLU
+    usage in the codebase after fixing the first one: PETBlock.edge_mlp's
+    first Linear -> ReLU. This one has no LayerNorm at all stabilizing its
+    input (unlike input_proj), and runs on every edge of every k-NN graph
+    in every block -- checked directly against the real trained checkpoint
+    (step 272,088), block 2's edge_mlp was 100.0% dead (every one of 256
+    units, zero output for all 86,480 real edges tested); blocks 0/1/3 were
+    83.6%/97.7%/98.8% dead. edge_mlp's first Linear has no normalization
+    layer before its activation, so its own bias alone is enough to force
+    every unit's pre-activation negative -- no LayerNorm affine trick
+    needed here."""
+    block = PETBlock(d=16, k=4)
+    with torch.no_grad():
+        block.edge_mlp[0].weight.zero_()
+        block.edge_mlp[0].bias.fill_(-5.0)
+    x = torch.randn(20, 16, requires_grad=True)
+    batch = torch.zeros(20, dtype=torch.long)
+    out = block(x, batch)
+    out.sum().backward()
+    edge_mlp_grad_norm = torch.cat(
+        [p.grad.flatten() for p in block.edge_mlp[0].parameters()]
+    ).norm()
+    assert edge_mlp_grad_norm > 0
+
+
 def test_input_proj_gradient_survives_deeply_negative_pre_activation(tiny_pyg_batch):
     """Real, confirmed production bug: input_proj used to be Linear ->
     LayerNorm -> ReLU. Checked directly against the full checkpoint history

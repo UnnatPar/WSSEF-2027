@@ -17,8 +17,17 @@ class PETBlock(nn.Module):
         super().__init__()
         self.d = d
         self.k = k
+        # GELU, not ReLU -- same fix, same reasoning as PETEncoder.input_proj
+        # (see that comment for the full mechanism and A/B evidence), but
+        # this collapse was measured even more severe here: this MLP has no
+        # LayerNorm at all stabilizing its input (unlike input_proj), and
+        # runs on every edge of every k-NN graph in every block. Checked
+        # directly against the real trained checkpoint (step 272,088):
+        # block 2's edge_mlp was 100.0% dead (every one of 256 units, zero
+        # output for all 86,480 real edges tested); blocks 0/1/3 were
+        # 83.6%/97.7%/98.8% dead.
         self.edge_mlp = nn.Sequential(
-            nn.Linear(2 * d, d), nn.ReLU(), nn.Linear(d, d)
+            nn.Linear(2 * d, d), nn.GELU(), nn.Linear(d, d)
         )
         self.W_Q = nn.Linear(d, d, bias=False)
         self.W_K = nn.Linear(d, d, bias=False)
