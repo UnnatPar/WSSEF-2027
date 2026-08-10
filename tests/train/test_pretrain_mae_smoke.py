@@ -1,3 +1,4 @@
+import math
 from types import SimpleNamespace
 
 import torch
@@ -71,6 +72,56 @@ def test_configure_optimizers_returns_a_decaying_cosine_schedule(tiny_pyg_batch,
     optimizer = trainer.optimizers[0]
     final_lr = optimizer.param_groups[0]["lr"]
     assert final_lr < model.cfg.lr
+
+
+def test_lr_schedule_total_steps_survives_a_resume_with_a_smaller_epoch_budget():
+    """Real, confirmed production bug: switching CosineAnnealingLR's T_max
+    to reflect a corrected epoch budget (100 -> 8) had ZERO effect on a
+    resumed run. Checked directly against a real checkpoint:
+    load_state_dict() on resume restores the scheduler's *entire* saved
+    state, including T_max -- so the freshly-computed, smaller T_max got
+    silently overwritten by the stale value (3,906,300, from the old
+    epochs=100 config) the instant the checkpoint was loaded. A config
+    change to fix the schedule had no effect because the checkpoint always
+    won.
+
+    LambdaLR fixes this: PyTorch's LambdaLR.state_dict() explicitly excludes
+    the lambda itself (only the step counter is saved/restored), so a
+    closure-captured `total_steps` computed fresh in the current process can
+    never be clobbered by an old checkpoint -- only the step position
+    resumes, not the schedule shape. This test simulates exactly the bug
+    scenario: a scheduler "trained" under a large total_steps (standing in
+    for the old epochs=100), then its saved state loaded into a fresh
+    scheduler built with a much smaller total_steps (standing in for the
+    epochs=8 fix) -- the smaller total_steps must survive."""
+    opt_a = torch.optim.SGD([torch.nn.Parameter(torch.zeros(1))], lr=1e-3)
+    large_total_steps = 1000
+
+    def lambda_large(step):
+        return 0.5 * (1 + math.cos(math.pi * min(step / large_total_steps, 1.0)))
+
+    sched_a = torch.optim.lr_scheduler.LambdaLR(opt_a, lambda_large)
+    for _ in range(10):
+        sched_a.step()
+    saved_state = sched_a.state_dict()
+
+    opt_b = torch.optim.SGD([torch.nn.Parameter(torch.zeros(1))], lr=1e-3)
+    small_total_steps = 20  # stands in for the epochs=8 fix's much smaller horizon
+
+    def lambda_small(step):
+        return 0.5 * (1 + math.cos(math.pi * min(step / small_total_steps, 1.0)))
+
+    sched_b = torch.optim.lr_scheduler.LambdaLR(opt_b, lambda_small)
+    sched_b.load_state_dict(saved_state)  # what Lightning does on resume
+
+    for _ in range(9):  # steps 10-18 of small_total_steps=20 -- deep into decay
+        sched_b.step()
+    lr_with_small_schedule = opt_b.param_groups[0]["lr"]
+
+    # If total_steps had been clobbered back to 1000 (the bug), step ~19/1000
+    # would be almost undecayed (~99.9% of initial lr). With the fix, step
+    # ~19/20 is nearly fully decayed.
+    assert lr_with_small_schedule < 1e-3 * 0.1
 
 
 def test_checkpoint_dirpath_and_filename_are_configurable(tmp_path):

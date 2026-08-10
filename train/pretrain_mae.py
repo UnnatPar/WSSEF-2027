@@ -1,4 +1,5 @@
 import argparse
+import math
 import os
 import sys
 
@@ -107,12 +108,28 @@ class MAEPretrain(pl.LightningModule):
         # max_epochs, dataset size, and resume state), so T_max tracks the
         # actual training horizon instead of a step count that would need
         # to be hand-computed and kept in sync with the dataset/config.
+        #
+        # LambdaLR, NOT CosineAnnealingLR: verified directly against a real
+        # checkpoint that resuming restores the scheduler's full saved
+        # state_dict, including T_max, clobbering a freshly-computed T_max
+        # right after construction -- an epochs config change (100 -> 8) had
+        # zero effect on a resumed run because the checkpoint's stale
+        # T_max=3,906,300 silently won every time. LambdaLR's state_dict
+        # excludes the lambda closure (only `last_epoch`/step count are
+        # restored), so `total_steps` below is captured fresh from the
+        # current run's config every time and can never be overwritten by
+        # an old checkpoint -- while the step counter itself still resumes
+        # correctly, so there's no jump in LR across a resume.
         optimizer = torch.optim.AdamW(
             self.parameters(), lr=self.cfg.lr, weight_decay=self.cfg.weight_decay,
         )
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=self.trainer.estimated_stepping_batches,
-        )
+        total_steps = self.trainer.estimated_stepping_batches
+
+        def lr_lambda(step):
+            progress = min(step / total_steps, 1.0)
+            return 0.5 * (1 + math.cos(math.pi * progress))
+
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
         return {
             "optimizer": optimizer,
             "lr_scheduler": {"scheduler": scheduler, "interval": "step"},
