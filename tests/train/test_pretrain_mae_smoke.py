@@ -44,6 +44,35 @@ def test_encoder_registered_under_encoder_attribute():
     assert any(k.startswith("encoder.") for k in model.state_dict().keys())
 
 
+def test_configure_optimizers_returns_a_decaying_cosine_schedule(tiny_pyg_batch, tmp_path):
+    """Real production run: train/mae_loss dropped fast in the first ~15k of
+    39,063 steps/epoch, then stayed flat for 135k+ more steps across
+    multiple epochs -- because configure_optimizers previously returned a
+    bare AdamW with no LR decay at all, so it reached a basin fast and then
+    just oscillated in it indefinitely. Verified directly (not assumed) this
+    wasn't a precision bug or broken gradients: fp32/fp16/bf16 all converge
+    to the identical floor on an overfit-one-batch test, and that same test
+    shows a clean, fast loss drop -- the optimizer mechanics work fine, they
+    just never decayed. This test checks the schedule is wired up AND
+    actually produces a lower LR after real steps, not just that a
+    scheduler object exists."""
+    from train.pretrain_mae import build_trainer
+
+    model = MAEPretrain(make_flat_cfg())
+    trainer = build_trainer(make_flat_cfg(), fast_dev_run=False, checkpoint_dirpath=str(tmp_path))
+    trainer.fit_loop.epoch_loop.max_steps = 5  # enough real steps to see decay, not a full epoch
+    trainer.limit_val_batches = 0
+
+    loader = torch.utils.data.DataLoader(
+        [tiny_pyg_batch] * 5, batch_size=None, collate_fn=lambda x: x,
+    )
+
+    trainer.fit(model, loader)
+    optimizer = trainer.optimizers[0]
+    final_lr = optimizer.param_groups[0]["lr"]
+    assert final_lr < model.cfg.lr
+
+
 def test_checkpoint_dirpath_and_filename_are_configurable(tmp_path):
     cfg = make_flat_cfg()
     trainer = build_trainer(

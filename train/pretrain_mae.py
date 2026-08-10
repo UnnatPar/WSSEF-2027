@@ -94,9 +94,29 @@ class MAEPretrain(pl.LightningModule):
         return loss
 
     def configure_optimizers(self):
-        return torch.optim.AdamW(
+        # Real production run: train/mae_loss dropped fast in the first
+        # ~15k of 39,063 steps/epoch, then stayed flat for the next 135k+
+        # steps across multiple epochs -- verified directly (not assumed) to
+        # NOT be a precision artifact (fp32/fp16/bf16 all converge to the
+        # same floor on an overfit-one-batch test) or a broken-gradient bug
+        # (the same test shows a clean, fast 80% loss drop). With no LR
+        # decay at all, AdamW at a constant step size reaches a basin fast
+        # and then just oscillates in it indefinitely -- exactly this
+        # symptom. `estimated_stepping_batches` is Lightning's own count of
+        # the real total steps this run will actually take (accounts for
+        # max_epochs, dataset size, and resume state), so T_max tracks the
+        # actual training horizon instead of a step count that would need
+        # to be hand-computed and kept in sync with the dataset/config.
+        optimizer = torch.optim.AdamW(
             self.parameters(), lr=self.cfg.lr, weight_decay=self.cfg.weight_decay,
         )
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=self.trainer.estimated_stepping_batches,
+        )
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {"scheduler": scheduler, "interval": "step"},
+        }
 
 
 def build_model(flat_cfg) -> MAEPretrain:
