@@ -5,11 +5,20 @@ import pytest
 from train.checkpoints import latest_checkpoint
 
 
-def test_latest_checkpoint_picks_highest_epoch(tmp_path):
-    for epoch in [0, 1, 11, 2]:
-        (tmp_path / f"epoch{epoch}.ckpt").write_bytes(b"fake")
+def test_latest_checkpoint_picks_most_recently_written_file(tmp_path):
+    # Files written in a tight loop can land on the same mtime (filesystem
+    # resolution varies), which would make ties fall to arbitrary glob order
+    # instead of the real invariant this checks -- explicit, increasing
+    # mtimes make this test exercise mtime comparison itself, matching how
+    # real checkpoints are actually written (always genuinely separated in
+    # time, one save at a time).
+    for i, epoch in enumerate([0, 1, 11, 2]):
+        path = tmp_path / f"epoch{epoch}.ckpt"
+        path.write_bytes(b"fake")
+        t = 1_700_000_000 + i
+        os.utime(path, (t, t))
     picked = latest_checkpoint(str(tmp_path))
-    assert picked.endswith("epoch11.ckpt")
+    assert picked.endswith("epoch2.ckpt")  # written last, regardless of its epoch number
 
 
 def test_latest_checkpoint_raises_when_empty(tmp_path):

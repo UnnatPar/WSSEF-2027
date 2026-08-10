@@ -8,7 +8,16 @@ training:
   batch_size: 256
   lr: 1.0e-3
   weight_decay: 0.05
-  epochs: 100
+  # 100 was a nominal/never-reachable cap (~9 days of A100 time at measured
+  # throughput). It also silently neutered the cosine LR schedule added
+  # after discovering the real production plateau: CosineAnnealingLR's
+  # T_max tracks Trainer.estimated_stepping_batches, which scales with this
+  # value -- at epochs=100, ~185k real steps in was only ~4.75% through the
+  # schedule, so LR had barely decayed (~99.4% of its initial value),
+  # explaining why the plateau persisted even after adding decay. 8 is a
+  # real, achievable target (~3-4 more epochs, ~7-9hr, from where a real
+  # production run currently is) that lets the schedule actually complete.
+  epochs: 8
   grad_clip: 1.0
   # 8 gets a dataloader worker SIGKILL'd by the host OOM killer after ~1,560
   # steps on a real Colab A100 despite ample system RAM at start -- smells
