@@ -35,14 +35,18 @@ data:
 
 logging:
   project: neutrinojepa
-  run_name: pretrain_mae_v3
+  run_name: pretrain_mae_v4
 
 checkpoint:
-  # v3, not v2: v2's checkpoints were trained under the collapsed-ReLU
-  # dynamics (input_proj/edge_mlp fixed to GELU after discovering 87-100%
-  # dead units there -- see models/pet.py). Starting fresh from random init
-  # in a new dir keeps the diagnostic clean: resuming from v2's damaged
-  # weights would confound "is the architecture fixed" with "how fast does
-  # a half-dead network recover", which isn't the question being asked.
-  dirpath: checkpoints/pretrain_mae_v3/
+  # v4, not v3: v3's checkpoints were trained with weight_decay applied to
+  # every LayerNorm's gain, with the gain already decayed to ~0.144 by step
+  # 39,064 and continuing to shrink -- a real, measured representation
+  # collapse (node embeddings for real, diverse pulses had converged to
+  # near-zero cross-sample variance), not something safe to resume from.
+  # See train/optim.py for the full story and the fix (weight_decay
+  # excluded from LayerNorm/bias params). v3 followed v2, whose checkpoints
+  # were trained under the earlier collapsed-ReLU dynamics (input_proj/
+  # edge_mlp fixed to GELU after discovering 87-100% dead units there).
+  # Starting fresh keeps the diagnostic clean each time.
+  dirpath: checkpoints/pretrain_mae_v4/
   filename: "epoch{epoch:04d}-step{step:09d}"
