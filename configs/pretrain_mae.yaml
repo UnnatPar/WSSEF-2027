@@ -35,8 +35,14 @@ data:
 
 logging:
   project: neutrinojepa
-  run_name: pretrain_mae_v2
+  run_name: pretrain_mae_v3
 
 checkpoint:
-  dirpath: checkpoints/pretrain_mae_v2/
+  # v3, not v2: v2's checkpoints were trained under the collapsed-ReLU
+  # dynamics (input_proj/edge_mlp fixed to GELU after discovering 87-100%
+  # dead units there -- see models/pet.py). Starting fresh from random init
+  # in a new dir keeps the diagnostic clean: resuming from v2's damaged
+  # weights would confound "is the architecture fixed" with "how fast does
+  # a half-dead network recover", which isn't the question being asked.
+  dirpath: checkpoints/pretrain_mae_v3/
   filename: "epoch{epoch:04d}-step{step:09d}"
