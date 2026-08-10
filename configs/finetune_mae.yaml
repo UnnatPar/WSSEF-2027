@@ -1,5 +1,5 @@
 model:
-  checkpoint: checkpoints/pretrain_mae_v4/  # v4: v3's weights collapsed via weight decay applied to LayerNorm gains, see train/optim.py; resolved to the latest available *.ckpt at runtime, not hardcoded to a specific epoch
+  checkpoint: checkpoints/pretrain_mae_v5/  # v5: v4's weights collapsed via missing LR warmup, see train/optim.py's warmup_cosine_lr_lambda; resolved to the latest available *.ckpt at runtime, not hardcoded to a specific epoch
   freeze_encoder: false
   d: 256
   L: 6

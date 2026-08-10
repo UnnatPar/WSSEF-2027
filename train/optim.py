@@ -1,3 +1,44 @@
+import math
+
+
+def warmup_cosine_lr_lambda(trainer, total_steps, warmup_steps):
+    """Linear LR warmup into a cosine decay, reading trainer.global_step
+    directly rather than the step argument LambdaLR passes in -- same
+    resume-safety reasoning as the plain cosine schedules in
+    pretrain_mae.py/jepa.py (a scheduler's own internal step counter does
+    not reliably track true cumulative progress across checkpoint resumes).
+
+    Root cause this fixes, confirmed by a controlled A/B on real data: with
+    no warmup (lr jumps to its full peak value on step 1), PETEncoder's node
+    embedding cross-sample std collapsed from 0.68 (healthy, at random
+    init) to 0.004 within 20 real AdamW steps and never recovered (0.0017
+    by step 300) -- a full representation collapse, independent of and
+    prior to the separate LayerNorm-gain-decay collapse (see
+    split_decay_params above). With a 100-step linear warmup under
+    otherwise identical conditions (same seed, data, architecture, step
+    count), std stayed 60-100x higher throughout (0.45 at step 20, ~0.13-0.17
+    by step 300) and reached a genuinely lower loss (~0.007-0.009 vs
+    ~0.010-0.015 without warmup). Mechanism: AdamW's bias-corrected
+    second-moment estimate is enormous in the first few steps (it divides by
+    1 - beta2^step, ~1000x amplification at step 1 for beta2=0.999), so a
+    full-strength first step on a deep (L=6) k-NN attention stack is large
+    enough to immediately push the whole encoder toward the degenerate
+    "predict the batch mean" fixed point -- a well-documented failure mode
+    for deep transformer/GNN training generally, which is why warmup is
+    standard practice (BERT, ViT, etc.) and was the one thing missing here.
+    """
+    warmup_steps = max(warmup_steps, 1)
+
+    def lr_lambda(_):
+        step = trainer.global_step
+        if step < warmup_steps:
+            return step / warmup_steps
+        progress = min((step - warmup_steps) / max(total_steps - warmup_steps, 1), 1.0)
+        return 0.5 * (1 + math.cos(math.pi * progress))
+
+    return lr_lambda
+
+
 def split_decay_params(module):
     """Splits a module's trainable parameters into (decay, no_decay) groups
     for AdamW, following standard transformer training practice (GPT-2/3,

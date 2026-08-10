@@ -1,4 +1,3 @@
-import math
 import random
 
 import lightning as pl
@@ -9,7 +8,7 @@ from torch_ema import ExponentialMovingAverage
 
 from data.masking import spatial_cluster_mask
 from models.pet import PETEncoder
-from train.optim import make_param_groups
+from train.optim import make_param_groups, warmup_cosine_lr_lambda
 
 
 class NeutrinoJEPA(pl.LightningModule):
@@ -149,17 +148,25 @@ class NeutrinoJEPA(pl.LightningModule):
         # since NeutrinoJEPA shares the same PETEncoder and the same
         # weight_decay-on-everything pattern, even though this experiment
         # hasn't run in production yet this session.
+        # warmup_cosine_lr_lambda, NOT a bare cosine schedule: applied here
+        # proactively for the same reason make_param_groups was -- confirmed
+        # in train/pretrain_mae.py's sibling MAEPretrain (same PETEncoder)
+        # that a bare cosine schedule with no warmup lets AdamW's first few
+        # steps (bias-corrected second moment ~1000x amplified with no
+        # warmup) collapse node embedding diversity from healthy (~0.68) to
+        # near-zero (~0.004) within 20 steps, independent of and prior to
+        # the separate LayerNorm-gain-decay collapse make_param_groups
+        # fixes. See train/optim.py for the full mechanism and the
+        # controlled A/B that confirmed it.
         opt = torch.optim.AdamW(
             make_param_groups(self, lr=self.cfg.lr, weight_decay=self.cfg.weight_decay),
             betas=(0.9, 0.95),
         )
         total_steps = self.trainer.estimated_stepping_batches
-
-        def lr_lambda(_):
-            progress = min(self.trainer.global_step / total_steps, 1.0)
-            return 0.5 * (1 + math.cos(math.pi * progress))
-
-        sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
+        warmup_steps = min(1000, total_steps // 20)
+        sched = torch.optim.lr_scheduler.LambdaLR(
+            opt, warmup_cosine_lr_lambda(self.trainer, total_steps, warmup_steps)
+        )
         return {
             "optimizer": opt,
             "lr_scheduler": {"scheduler": sched, "interval": "step"},

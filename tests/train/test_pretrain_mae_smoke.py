@@ -146,13 +146,16 @@ def test_lr_reflects_trainer_global_step_not_the_schedulers_own_counter():
     scheduler-internal bookkeeping. This test proves the lambda tracks
     global_step directly: with the scheduler's own counter frozen at 0
     (zero .step() calls made), just mutating global_step externally (as a
-    real resume effectively does) must still move the LR."""
+    real resume effectively does) must still move the LR.
+
+    Compares against cfg.lr (the schedule's peak), not lr at global_step=0:
+    warmup_cosine_lr_lambda deliberately makes lr=0.0 exactly at step 0 (see
+    train/optim.py), so lr_at_step_0 is no longer a valid "near-full-LR"
+    reference point now that warmup exists."""
     model = MAEPretrain(make_flat_cfg())
     model.trainer = _FakeTrainer(global_step=0, estimated_stepping_batches=1000)
     result = model.configure_optimizers()
     optimizer, scheduler = result["optimizer"], result["lr_scheduler"]["scheduler"]
-
-    lr_at_step_0 = optimizer.param_groups[0]["lr"]
 
     # Simulate a resume landing deep into the schedule -- mutate global_step
     # directly, WITHOUT ever calling scheduler.step(), exactly like a real
@@ -162,7 +165,7 @@ def test_lr_reflects_trainer_global_step_not_the_schedulers_own_counter():
     scheduler.step()  # triggers one recomputation using the lambda
     lr_after_resume = optimizer.param_groups[0]["lr"]
 
-    assert lr_after_resume < lr_at_step_0 * 0.1  # deep into decay, not still ~full LR
+    assert lr_after_resume < model.cfg.lr * 0.1  # deep into decay, not still ~full LR
 
 
 def test_checkpoint_dirpath_and_filename_are_configurable(tmp_path):

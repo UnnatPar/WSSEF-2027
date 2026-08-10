@@ -1,7 +1,12 @@
 import torch
 from torch import nn
 
-from train.optim import make_param_groups, split_decay_params
+from train.optim import make_param_groups, split_decay_params, warmup_cosine_lr_lambda
+
+
+class _FakeTrainer:
+    def __init__(self, global_step=0):
+        self.global_step = global_step
 
 
 def test_split_decay_params_puts_linear_weight_in_decay():
@@ -74,3 +79,39 @@ def test_layernorm_gain_survives_many_steps_of_pure_weight_decay_with_the_fix():
         "LayerNorm gain moved under zero gradient -- weight decay is still "
         "being applied to it despite make_param_groups"
     )
+
+
+def test_warmup_cosine_lr_lambda_ramps_linearly_from_zero_during_warmup():
+    trainer = _FakeTrainer(global_step=0)
+    lr_lambda = warmup_cosine_lr_lambda(trainer, total_steps=1000, warmup_steps=100)
+    assert lr_lambda(None) == 0.0
+    trainer.global_step = 50
+    assert lr_lambda(None) == 0.5
+    trainer.global_step = 99
+    assert abs(lr_lambda(None) - 0.99) < 1e-9
+
+
+def test_warmup_cosine_lr_lambda_reaches_full_lr_at_end_of_warmup():
+    trainer = _FakeTrainer(global_step=100)
+    lr_lambda = warmup_cosine_lr_lambda(trainer, total_steps=1000, warmup_steps=100)
+    assert abs(lr_lambda(None) - 1.0) < 1e-9
+
+
+def test_warmup_cosine_lr_lambda_decays_to_zero_at_total_steps():
+    trainer = _FakeTrainer(global_step=1000)
+    lr_lambda = warmup_cosine_lr_lambda(trainer, total_steps=1000, warmup_steps=100)
+    assert abs(lr_lambda(None)) < 1e-9
+
+
+def test_warmup_cosine_lr_lambda_never_exceeds_one():
+    trainer = _FakeTrainer(global_step=0)
+    lr_lambda = warmup_cosine_lr_lambda(trainer, total_steps=1000, warmup_steps=100)
+    for step in range(0, 1001, 17):
+        trainer.global_step = step
+        assert 0.0 <= lr_lambda(None) <= 1.0 + 1e-9
+
+
+def test_warmup_cosine_lr_lambda_handles_zero_warmup_steps_without_dividing_by_zero():
+    trainer = _FakeTrainer(global_step=1)
+    lr_lambda = warmup_cosine_lr_lambda(trainer, total_steps=1000, warmup_steps=0)
+    assert abs(lr_lambda(None) - 1.0) < 1e-9  # warmup_steps clamped to 1, so step 1 is already past it

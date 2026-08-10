@@ -58,6 +58,10 @@ def test_no_target_encoder_attribute():
 
 def test_ema_update_changes_shadow_params(tiny_pyg_batch):
     model = make_model_with_fake_trainer()
+    # Past warmup_cosine_lr_lambda's warmup window, or the very first
+    # optimizer.step() below is a no-op (lr=0.0 by design at global_step=0)
+    # and neither the encoder nor its EMA shadow would move at all.
+    model.trainer.global_step = 200
     before = [p.clone() for p in model.ema.shadow_params]
     optimizer = model.configure_optimizers()["optimizer"]
     # configure_optimizers needs self.trainer; training_step's self.log()
@@ -106,18 +110,21 @@ def test_lr_reflects_trainer_global_step_not_the_schedulers_own_counter():
     reasoning. Proves the lambda tracks global_step directly: with the
     scheduler's own counter frozen at 0 (zero .step() calls made), just
     mutating global_step externally (as a real resume effectively does)
-    must still move the LR."""
+    must still move the LR.
+
+    Compares against cfg.lr (the schedule's peak), not lr at global_step=0:
+    warmup_cosine_lr_lambda deliberately makes lr=0.0 exactly at step 0 (see
+    train/optim.py), so lr_at_step_0 is no longer a valid "near-full-LR"
+    reference point now that warmup exists."""
     model = make_model_with_fake_trainer(estimated_stepping_batches=1000)
     result = model.configure_optimizers()
     optimizer, scheduler = result["optimizer"], result["lr_scheduler"]["scheduler"]
-
-    lr_at_step_0 = optimizer.param_groups[0]["lr"]
 
     model.trainer.global_step = 900
     scheduler.step()
     lr_after_resume = optimizer.param_groups[0]["lr"]
 
-    assert lr_after_resume < lr_at_step_0 * 0.1
+    assert lr_after_resume < model.cfg.lr * 0.1
 
 
 def test_encoder_registered_under_encoder_attribute_for_checkpoint_loading():

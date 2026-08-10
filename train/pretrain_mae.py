@@ -1,5 +1,4 @@
 import argparse
-import math
 import os
 import sys
 
@@ -22,7 +21,7 @@ from models.pet import PETEncoder
 from train.checkpoints import latest_checkpoint
 from train.config import flatten_sections, load_config
 from train.dataset import build_dataloader, build_dataset
-from train.optim import make_param_groups
+from train.optim import make_param_groups, warmup_cosine_lr_lambda
 from train.pretrain import build_trainer
 
 
@@ -143,16 +142,28 @@ class MAEPretrain(pl.LightningModule):
         # embedding cross-sample std ~0.0002 for 10,810 real, physically
         # diverse pulses -- masked AND unmasked alike, and even with no
         # masking applied at all). See train/optim.py for the full story.
+        # warmup_cosine_lr_lambda, NOT a bare cosine schedule: the actual
+        # root cause of the "predictions are exactly constant" collapse,
+        # found after the make_param_groups fix above held up (LayerNorm
+        # gains confirmed stable at ~1.0 in a real run) but node embeddings
+        # were STILL fully collapsed (cross-sample std ~0.0004 for real,
+        # diverse pulses, masked and unmasked alike) within the first ~50
+        # steps of every run so far. Verified directly with a controlled
+        # A/B on real data (same seed/data/architecture/step count, only
+        # the warmup differed): with no warmup, node embedding std collapsed
+        # from 0.68 to 0.004 within 20 steps and never recovered; with a
+        # 100-step linear warmup, std stayed 60-100x higher throughout and
+        # reached a genuinely lower loss. See train/optim.py for the full
+        # mechanism (AdamW's bias-corrected second moment is ~1000x
+        # amplified in the first few steps with no warmup).
         optimizer = torch.optim.AdamW(
             make_param_groups(self, lr=self.cfg.lr, weight_decay=self.cfg.weight_decay),
         )
         total_steps = self.trainer.estimated_stepping_batches
-
-        def lr_lambda(_):
-            progress = min(self.trainer.global_step / total_steps, 1.0)
-            return 0.5 * (1 + math.cos(math.pi * progress))
-
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+        warmup_steps = min(1000, total_steps // 20)
+        scheduler = torch.optim.lr_scheduler.LambdaLR(
+            optimizer, warmup_cosine_lr_lambda(self.trainer, total_steps, warmup_steps)
+        )
         return {
             "optimizer": optimizer,
             "lr_scheduler": {"scheduler": scheduler, "interval": "step"},
