@@ -54,12 +54,17 @@ data:
 
 logging:
   project: neutrinojepa
-  run_name: mae_finetune_v3
+  run_name: mae_finetune_v4
 
 checkpoint:
-  # v3, not v2: v2 (warmup with a hard switch to pure vMF) still collapsed
-  # immediately past the warmup boundary -- fixed by vmf_blend_weight above.
-  # v2 followed v1 (raw vMF loss end-to-end, no staging at all). Not safe to
-  # resume from either.
-  dirpath: checkpoints/mae_finetune_v3/
+  # v4, not v3: v3 (direction-loss blend fix) still collapsed -- the
+  # encoder itself re-collapsed via GNN over-smoothing during unfrozen
+  # fine-tuning (node_emb std 0.61 -> 0.19 by step 11,561), because
+  # configure_optimizers used a flat, unscheduled AdamW with zero LR
+  # warmup for the encoder. Fixed by carrying over the same
+  # warmup_cosine_lr_lambda already proven for pretrain_mae.py/jepa.py. v3
+  # followed v2 (hard switch to pure vMF at the warmup boundary), which
+  # followed v1 (raw vMF loss, no staging at all). None are safe to resume
+  # from.
+  dirpath: checkpoints/mae_finetune_v4/
   filename: "epoch{epoch:04d}-step{step:09d}"

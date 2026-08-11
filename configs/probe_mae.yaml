@@ -42,13 +42,16 @@ data:
 
 logging:
   project: neutrinojepa
-  run_name: mae_probe_v2
+  run_name: mae_probe_v3
 
 checkpoint:
-  # v2, not v1: v1's checkpoints were trained with the hard-switch staging
-  # (direction_warmup_steps alone, no blend), which still collapsed
-  # immediately past the warmup boundary -- see
-  # configs/finetune_mae.yaml's vmf_blend_weight comment. Not safe to
-  # resume from.
-  dirpath: checkpoints/mae_probe_v2/
+  # v3, not v2: configure_optimizers now returns a scheduled (LR-warmup)
+  # optimizer instead of a bare one -- v2's checkpoints predate that and
+  # have no compatible scheduler state to resume from (same class of issue
+  # as every other LR-schedule-format change this session). v2's checkpoints
+  # were trained with the hard-switch staging (direction_warmup_steps alone,
+  # no blend), which still collapsed immediately past the warmup boundary --
+  # see configs/finetune_mae.yaml's vmf_blend_weight comment. Neither is
+  # safe to resume from.
+  dirpath: checkpoints/mae_probe_v3/
   filename: "epoch{epoch:04d}-step{step:09d}"
