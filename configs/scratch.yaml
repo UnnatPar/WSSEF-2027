@@ -29,8 +29,17 @@ data:
 
 logging:
   project: neutrinojepa
-  run_name: scratch_v1
+  run_name: scratch_v2
 
 checkpoint:
-  dirpath: checkpoints/scratch_v1/
+  # v2, not v1: v1's checkpoints were trained with pool_proj's output fed
+  # unnormalized straight into direction_head/kappa_head -- global_add_pool
+  # inside encode_event() makes the pooled embedding's magnitude scale
+  # almost linearly with event size (measured r=0.98 correlation, norm 76 at
+  # 25 pulses vs 512-604 at 256 pulses across 256 real events), which
+  # saturated direction_head's sigmoid and collapsed its output to a
+  # near-constant (std=0.00045) within the first few thousand steps. See
+  # models/pet.py's PETEncoder.pool_norm for the fix. Starting fresh keeps
+  # the diagnostic clean -- v1's checkpoints are not safe to resume from.
+  dirpath: checkpoints/scratch_v2/
   filename: "epoch{epoch:04d}-step{step:09d}"
