@@ -7,7 +7,7 @@ from torch import nn
 from eval.metrics import mean_angular_error, to_cartesian
 from models.heads import ClassificationHead, DirectionHead
 from models.pet import PETEncoder
-from train.optim import split_decay_params
+from train.optim import split_decay_params, warmup_cosine_lr_lambda
 
 
 class SupervisedFineTune(pl.LightningModule):
@@ -188,18 +188,45 @@ class SupervisedFineTune(pl.LightningModule):
             head_no_decay += nd
 
         if self.cfg.freeze_encoder:
-            return torch.optim.AdamW([
+            groups = [
                 {"params": head_decay, "lr": self.cfg.lr_heads, "weight_decay": self.cfg.weight_decay},
                 {"params": head_no_decay, "lr": self.cfg.lr_heads, "weight_decay": 0.0},
-            ])
+            ]
+        else:
+            encoder_decay, encoder_no_decay = split_decay_params(self.encoder)
+            groups = [
+                {"params": encoder_decay, "lr": self.cfg.lr_encoder, "weight_decay": self.cfg.weight_decay},
+                {"params": encoder_no_decay, "lr": self.cfg.lr_encoder, "weight_decay": 0.0},
+                {"params": head_decay, "lr": self.cfg.lr_heads, "weight_decay": self.cfg.weight_decay},
+                {"params": head_no_decay, "lr": self.cfg.lr_heads, "weight_decay": 0.0},
+            ]
 
-        encoder_decay, encoder_no_decay = split_decay_params(self.encoder)
-        return torch.optim.AdamW([
-            {"params": encoder_decay, "lr": self.cfg.lr_encoder, "weight_decay": self.cfg.weight_decay},
-            {"params": encoder_no_decay, "lr": self.cfg.lr_encoder, "weight_decay": 0.0},
-            {"params": head_decay, "lr": self.cfg.lr_heads, "weight_decay": self.cfg.weight_decay},
-            {"params": head_no_decay, "lr": self.cfg.lr_heads, "weight_decay": 0.0},
-        ])
+        # warmup_cosine_lr_lambda, NOT a bare (unscheduled) AdamW: root cause
+        # of a real, confirmed collapse in mae_finetune_v3 (step 11,561),
+        # found after the direction-loss staging/blend fix (f1dd6e7) held up
+        # (loss curve looked healthy) but direct measurement showed az/zen
+        # predictions were still an exact constant. Traced upstream:
+        # node_emb (the encoder's own per-pulse output) had degraded from a
+        # healthy 0.61 (the pretrain_mae_v6 checkpoint this run started from)
+        # to 0.19 after 11,561 unfrozen fine-tuning steps -- the exact same
+        # GNN over-smoothing collapse diagnosed and fixed for MAE pretraining
+        # in 799354b, recurring here because configure_optimizers used a
+        # flat, unscheduled AdamW with zero LR warmup for the now-unfrozen
+        # encoder, missing the exact protection pretrain_mae.py already has.
+        # Applied to both the frozen and unfrozen cases for consistency --
+        # even head-only training benefits from not starting at full LR on
+        # step 1 given everything else learned about this architecture's
+        # cold-start sensitivity this session.
+        optimizer = torch.optim.AdamW(groups)
+        total_steps = self.trainer.estimated_stepping_batches
+        warmup_steps = min(1000, total_steps // 20)
+        scheduler = torch.optim.lr_scheduler.LambdaLR(
+            optimizer, warmup_cosine_lr_lambda(self.trainer, total_steps, warmup_steps)
+        )
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {"scheduler": scheduler, "interval": "step"},
+        }
 
 
 def load_full_checkpoint(cfg, checkpoint_path: str) -> SupervisedFineTune:

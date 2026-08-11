@@ -18,8 +18,9 @@ def make_cfg(**overrides):
 
 
 class _FakeTrainer:
-    def __init__(self, global_step=0):
+    def __init__(self, global_step=0, estimated_stepping_batches=1000):
         self.global_step = global_step
+        self.estimated_stepping_batches = estimated_stepping_batches
 
 
 def make_labeled_batch(with_pid=False):
@@ -72,7 +73,8 @@ def test_no_pid_batch_leaves_classification_head_ungraded():
 def test_frozen_encoder_has_no_grad_and_optimizer_excludes_it():
     model = SupervisedFineTune(make_cfg(freeze_encoder=True))
     assert all(not p.requires_grad for p in model.encoder.parameters())
-    optimizer = model.configure_optimizers()
+    model.trainer = _FakeTrainer()
+    optimizer = model.configure_optimizers()["optimizer"]
     optimized_param_ids = {id(p) for group in optimizer.param_groups for p in group["params"]}
     encoder_param_ids = {id(p) for p in model.encoder.parameters()}
     assert optimized_param_ids.isdisjoint(encoder_param_ids)
@@ -84,8 +86,14 @@ def test_unfrozen_optimizer_uses_both_lrs_with_decay_split_per_lr():
     # decayed, which is why this split exists at all).
     cfg = make_cfg(freeze_encoder=False)
     model = SupervisedFineTune(cfg)
-    optimizer = model.configure_optimizers()
-    lrs_present = {g["lr"] for g in optimizer.param_groups}
+    model.trainer = _FakeTrainer()
+    optimizer = model.configure_optimizers()["optimizer"]
+    # "initial_lr" (the pre-warmup base LR each group was constructed with),
+    # not "lr" -- warmup_cosine_lr_lambda deliberately makes lr=0.0 exactly
+    # at global_step=0 (see train/optim.py), so runtime lr is no longer a
+    # valid "which base LR was this group given" check now that warmup
+    # exists.
+    lrs_present = {g["initial_lr"] for g in optimizer.param_groups}
     assert lrs_present == {cfg.lr_encoder, cfg.lr_heads}
     for group in optimizer.param_groups:
         assert group["weight_decay"] in (0.0, cfg.weight_decay)
@@ -93,6 +101,32 @@ def test_unfrozen_optimizer_uses_both_lrs_with_decay_split_per_lr():
     no_decay_groups = [g for g in optimizer.param_groups if g["weight_decay"] == 0.0]
     assert all(len(g["params"]) > 0 for g in no_decay_groups)
     assert all(p.dim() < 2 for g in no_decay_groups for p in g["params"])
+
+
+def test_configure_optimizers_returns_adamw_and_warmup_cosine_schedule():
+    model = SupervisedFineTune(make_cfg(freeze_encoder=False))
+    model.trainer = _FakeTrainer()
+    result = model.configure_optimizers()
+    assert isinstance(result["optimizer"], torch.optim.AdamW)
+    assert isinstance(result["lr_scheduler"]["scheduler"], torch.optim.lr_scheduler.LambdaLR)
+    assert result["lr_scheduler"]["interval"] == "step"
+
+
+def test_lr_is_zero_at_step_0_and_ramps_up_during_warmup():
+    """Root cause fixed here, confirmed on a real run (mae_finetune_v3, step
+    11,561): configure_optimizers used a flat, unscheduled AdamW -- zero LR
+    warmup for the now-unfrozen encoder -- and node_emb (the encoder's own
+    per-pulse output) degraded from a healthy 0.61 to 0.19 after 11,561
+    steps, the same over-smoothing collapse fixed for MAE pretraining in
+    799354b but never carried over here."""
+    model = SupervisedFineTune(make_cfg(freeze_encoder=False))
+    model.trainer = _FakeTrainer(global_step=0, estimated_stepping_batches=1000)
+    result = model.configure_optimizers()
+    optimizer = result["optimizer"]
+    assert optimizer.param_groups[0]["lr"] == 0.0
+    model.trainer.global_step = 25
+    result["lr_scheduler"]["scheduler"].step()
+    assert optimizer.param_groups[0]["lr"] > 0.0
 
 
 def test_build_supervised_model_loads_encoder_weights_from_jepa_checkpoint(tmp_path):
