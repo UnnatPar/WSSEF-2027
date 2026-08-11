@@ -40,14 +40,15 @@ data:
 
 logging:
   project: neutrinojepa
-  run_name: scratch_v3
+  run_name: scratch_v4
 
 checkpoint:
-  # v3, not v2: v2 fixed the pool_norm saturation issue but still hit a
-  # second, separate collapse -- raw vMF loss from a cold direction_head/
-  # kappa_head, now fixed by training.direction_warmup_steps above. v2
-  # followed v1 (pool_proj fed unnormalized into direction_head, see
-  # models/pet.py's PETEncoder.pool_norm). Starting fresh keeps the
-  # diagnostic clean -- v2's checkpoints are not safe to resume from.
-  dirpath: checkpoints/scratch_v3/
+  # v4, not v3: v3 (direction-loss blend + encoder LR warmup) still
+  # collapsed by step 30,922 (az/zen std 0.0034/0.0000) despite the encoder
+  # itself confirmed healthy (node_emb std=0.57) -- traced to
+  # DirectionHead's own internal layers having no normalization, fixed in
+  # models/heads.py. v3 followed v2 (pool_norm fix, still hit the vMF
+  # cold-start collapse), which followed v1 (pool_proj fed unnormalized
+  # into direction_head). None are safe to resume from.
+  dirpath: checkpoints/scratch_v4/
   filename: "epoch{epoch:04d}-step{step:09d}"
