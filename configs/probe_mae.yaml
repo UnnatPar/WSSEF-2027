@@ -22,11 +22,14 @@ training:
   lambda_direction: 1.0
   lambda_classification: 0.5
   early_stopping_patience: 5
-  # See configs/finetune_mae.yaml's training.direction_warmup_steps for the
-  # full mechanism -- SupervisedFineTune's direction_head/kappa_head are
-  # freshly initialized here too (only the encoder is loaded from a
-  # checkpoint), so the same cold-start vMF collapse applies.
+  # See configs/finetune_mae.yaml's training.direction_warmup_steps and
+  # vmf_blend_weight comments for the full mechanism (including why a hard
+  # switch to pure vMF at the warmup boundary alone was NOT sufficient) --
+  # SupervisedFineTune's direction_head/kappa_head are freshly initialized
+  # here too (only the encoder is loaded from a checkpoint), so the same
+  # cold-start vMF collapse applies.
   direction_warmup_steps: 3000
+  vmf_blend_weight: 0.05
 
 data:
   max_pulses: 256
@@ -39,8 +42,13 @@ data:
 
 logging:
   project: neutrinojepa
-  run_name: mae_probe_v1
+  run_name: mae_probe_v2
 
 checkpoint:
-  dirpath: checkpoints/mae_probe_v1/
+  # v2, not v1: v1's checkpoints were trained with the hard-switch staging
+  # (direction_warmup_steps alone, no blend), which still collapsed
+  # immediately past the warmup boundary -- see
+  # configs/finetune_mae.yaml's vmf_blend_weight comment. Not safe to
+  # resume from.
+  dirpath: checkpoints/mae_probe_v2/
   filename: "epoch{epoch:04d}-step{step:09d}"

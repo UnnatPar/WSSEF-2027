@@ -24,13 +24,24 @@ training:
   # (std=0.0000) -- even with an already-healthy, non-collapsed
   # MAE-pretrained encoder underneath, since direction_head/kappa_head are
   # separate, freshly-initialized modules that hit the same cold-start
-  # dynamics regardless of encoder quality. See models/finetune.py's
-  # _compute_loss for the full mechanism (matches the real IceCube Kaggle
-  # winners' own documented experience, arXiv:2310.15674). For the first
-  # 3000 steps, use a plain cos-distance loss (no kappa at all, cannot
-  # collapse this way) to let direction_head learn a real signal before
-  # kappa's dynamics are introduced.
+  # dynamics regardless of encoder quality. For the first 3000 steps, use a
+  # plain cos-distance loss (no kappa at all, cannot collapse this way) to
+  # let direction_head learn a real signal before kappa's dynamics are
+  # introduced.
+  #
+  # A hard switch to pure vMF at this boundary (mae_finetune_v2) was NOT
+  # sufficient: confirmed directly, cos-distance was stable through the
+  # whole warmup (~0.93-1.02) but train/loss jumped from 1.015 at step 2999
+  # to 2.617 at step 3049 and stayed collapsed indefinitely -- the same trap
+  # just relocated to the warmup boundary. See models/finetune.py's
+  # _compute_loss for the full mechanism and the fix: vmf_blend_weight below
+  # keeps cos-distance as the permanent, dominant loss term (matching the
+  # real IceCube Kaggle winners' own documented, proven recipe,
+  # arXiv:2310.15674 -- `opening_angle + 0.05 * vMF_loss`), so vMF can only
+  # ever contribute a small calibration signal to kappa_head, never take
+  # over direction_head's gradient the way a pure vMF loss can.
   direction_warmup_steps: 3000
+  vmf_blend_weight: 0.05
 
 data:
   max_pulses: 256
@@ -43,11 +54,12 @@ data:
 
 logging:
   project: neutrinojepa
-  run_name: mae_finetune_v2
+  run_name: mae_finetune_v3
 
 checkpoint:
-  # v2, not v1: v1's checkpoints are a product of the direction_head/
-  # kappa_head collapse fixed by training.direction_warmup_steps above --
-  # not safe to resume from.
-  dirpath: checkpoints/mae_finetune_v2/
+  # v3, not v2: v2 (warmup with a hard switch to pure vMF) still collapsed
+  # immediately past the warmup boundary -- fixed by vmf_blend_weight above.
+  # v2 followed v1 (raw vMF loss end-to-end, no staging at all). Not safe to
+  # resume from either.
+  dirpath: checkpoints/mae_finetune_v3/
   filename: "epoch{epoch:04d}-step{step:09d}"

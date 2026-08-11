@@ -85,42 +85,55 @@ class SupervisedFineTune(pl.LightningModule):
         pred_vec = to_cartesian(az, zen)
         true_vec = to_cartesian(batch.azimuth, batch.zenith)
 
-        # Staged direction loss -- root cause fixed here, confirmed directly
-        # on a real run (mae_finetune_v1, step 74,301): raw vMF loss applied
-        # end-to-end from a cold (randomly initialized) direction_head/
-        # kappa_head collapsed az/zen predictions to an exact constant
-        # (std=0.0000), even though the encoder underneath was already
-        # healthy and non-collapsed (a warm-started, real MAE-pretrained
-        # encoder didn't help -- direction_head/kappa_head are separate,
-        # freshly-initialized modules on top of it, so they hit the same
-        # cold-start dynamics regardless). Mechanism: whenever a fresh
-        # direction_head's predictions are worse than random
-        # (cos(Delta theta) < 0, near-universal at cold start), the vMF loss
-        # term -kappa*cos(Delta theta) is genuinely minimized by shrinking
-        # kappa toward zero -- a real, mathematically correct gradient
-        # signal, not a bug -- which drags direction_head's own gradient
-        # down with it (the vMF loss's gradient w.r.t. direction scales with
-        # kappa), creating a self-reinforcing trap: direction can't improve
-        # without gradient, kappa won't rise without better direction. The
-        # actual IceCube Kaggle competition winners hit and solved this
-        # exact problem (arXiv:2310.15674): the 2nd place team used a plain
-        # angular-distance loss for the first 2-3 epochs before blending in
-        # vMF; the 3rd place team froze the backbone and trained a
-        # classification-based direction estimate before ever training a
-        # vMF-loss regression head. direction_warmup_steps mirrors this:
-        # cos-distance loss (no kappa at all, cannot collapse this way) for
-        # the first N steps, giving direction_head a chance to learn a
-        # reasonable estimate before kappa's dynamics are introduced.
+        # Staged + blended direction loss -- root cause fixed here, confirmed
+        # directly on two real runs: raw vMF loss applied end-to-end from a
+        # cold (randomly initialized) direction_head/kappa_head collapsed
+        # az/zen predictions to an exact constant (mae_finetune_v1, step
+        # 74,301: std=0.0000), even with an already-healthy, non-collapsed
+        # MAE-pretrained encoder underneath (direction_head/kappa_head are
+        # separate, freshly-initialized modules, so encoder quality doesn't
+        # help). Mechanism: whenever direction predictions are worse than
+        # random (cos(Delta theta) < 0), the vMF term -kappa*cos(Delta theta)
+        # is genuinely minimized by shrinking kappa toward zero -- a real,
+        # mathematically correct gradient signal -- which drags
+        # direction_head's own gradient down with it (vMF's gradient w.r.t.
+        # direction scales with kappa), a self-reinforcing trap.
+        #
+        # A first fix (direction_warmup_steps alone, hard-switching from pure
+        # cos-distance to pure vMF at the boundary) was NOT sufficient:
+        # confirmed on mae_finetune_v2/mae_probe_v1, cos-distance loss was
+        # healthy and stable (~0.93-1.02, matching the ~1.0 random-guess
+        # baseline) for the entire warmup window, but train/loss jumped from
+        # 1.015 at step 2999 to 2.617 at step 3049 -- immediately upon
+        # switching to pure vMF -- and stayed collapsed there indefinitely
+        # (probe's whole multi-thousand-step visible history sat flat at
+        # ~2.6-2.7 with no recovery). A hard switch just relocates the same
+        # cold-start trap to the warmup boundary, since vMF alone can still
+        # dominate the gradient once introduced.
+        #
+        # The actual IceCube Kaggle competition winners' proven fix
+        # (arXiv:2310.15674) is not a hard switch but a permanent blend: the
+        # 2nd place team used pure angular-distance loss for the first 2-3
+        # epochs, then trained with `l = opening_angle + 0.05 * vMF_loss` for
+        # the rest of training -- vMF never becomes the dominant term, only a
+        # small always-present calibration signal for kappa, so it can never
+        # again hijack direction_head's gradient the way a pure vMF loss can.
+        # Mirrored here: pure cos-distance for the first
+        # direction_warmup_steps, then cos-distance + vmf_blend_weight * vMF
+        # (default 0.05, matching the real value) for the remainder --
+        # cos-distance stays dominant and well-behaved forever, vMF only
+        # contributes gradient to kappa_head, not full control over
+        # direction_head.
         try:
             global_step = self.trainer.global_step
         except (RuntimeError, TypeError, AttributeError):
             global_step = None
         warmup_steps = getattr(self.cfg, "direction_warmup_steps", 0)
 
-        if global_step is not None and global_step < warmup_steps:
-            cos_sim = (pred_vec * true_vec).sum(-1)
-            direction_loss = (1 - cos_sim).mean()
-        else:
+        cos_sim = (pred_vec * true_vec).sum(-1)
+        direction_loss = (1 - cos_sim).mean()
+
+        if global_step is None or global_step >= warmup_steps:
             pred = torch.cat([pred_vec, kappa], dim=-1)
             # graphnet's VonMisesFisher3DLoss.log_cmk mixes its two internal
             # branches (log_cmk_approx, log_cmk_exact) in an index_put --
@@ -128,7 +141,9 @@ class SupervisedFineTune(pl.LightningModule):
             # fp32) and the assignment throws. Verified by direct testing on
             # a real training step, not a fixture.
             with torch.autocast(device_type=pred.device.type, enabled=False):
-                direction_loss = self.direction_loss_fn(pred.float(), true_vec.float())
+                vmf_loss = self.direction_loss_fn(pred.float(), true_vec.float())
+            vmf_blend_weight = getattr(self.cfg, "vmf_blend_weight", 0.05)
+            direction_loss = direction_loss + vmf_blend_weight * vmf_loss
         loss = self.cfg.lambda_direction * direction_loss
 
         if hasattr(batch, "pid"):
