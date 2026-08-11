@@ -127,6 +127,28 @@ class PETEncoder(nn.Module):
         )
         self.blocks = nn.ModuleList([PETBlock(d, k) for _ in range(L)])
         self.pool_proj = nn.Linear(3 * d, d)  # 3-way: mean + max + sum
+        # LayerNorm after pool_proj -- root cause fixed here, confirmed
+        # directly against a real checkpoint (configs/scratch.yaml's
+        # from-scratch supervised experiment, step 4,252): encode_event's
+        # global_add_pool (a plain sum over an event's pulses) makes g's
+        # magnitude scale almost linearly with event size -- measured
+        # correlation r=0.98 between pulse count and ||g|| across 256 real
+        # events (25 pulses -> norm 76, 256 pulses -> norm 512-604). With no
+        # normalization anywhere between pool_proj and the downstream heads
+        # (DirectionHead/ClassificationHead/kappa_head all feed g straight
+        # into a Linear -> ... -> sigmoid/softplus), that large,
+        # event-size-dependent magnitude saturates sigmoid, killing its
+        # gradient: direction_head's raw output std was 0.00045 (collapsed
+        # to a near-constant prediction) despite g itself being genuinely
+        # diverse (cross-sample std 9.13, NOT collapsed) -- proving the
+        # problem was downstream of the encoder, in this unnormalized
+        # hand-off. kappa was correspondingly pinned at its floor value
+        # (mean 1.0079, std 0.0000) with kappa_raw deeply negative (mean
+        # -6.84), consistent with direction_head/kappa_head receiving a
+        # signal too saturated to produce a useful gradient. Standardizing
+        # g's scale here, independent of event size, fixes this at the
+        # source rather than patching each downstream head separately.
+        self.pool_norm = nn.LayerNorm(d)
 
     def forward(self, x: Tensor, batch: Tensor, batch_size: int | None = None) -> Tensor:
         x = self.input_proj(x)
@@ -141,4 +163,4 @@ class PETEncoder(nn.Module):
             global_max_pool(x, batch),
             global_add_pool(x, batch),
         ], dim=-1)
-        return self.pool_proj(g)
+        return self.pool_norm(self.pool_proj(g))

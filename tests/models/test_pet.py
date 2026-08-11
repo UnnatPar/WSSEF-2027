@@ -73,6 +73,38 @@ def test_pet_encoder_forward_shape(tiny_pyg_batch):
     assert out.shape == (tiny_pyg_batch.x.shape[0], 16)
 
 
+def test_pet_encoder_encode_event_norm_does_not_scale_with_event_size():
+    """Root cause of a real collapsed-direction-head bug, confirmed against a
+    real checkpoint (configs/scratch.yaml, step 4,252): encode_event's
+    global_add_pool sums over an event's pulses, so g's magnitude scaled
+    almost linearly with event size (measured r=0.98 between pulse count and
+    ||g|| across 256 real events, 76 at 25 pulses vs 512-604 at 256 pulses).
+    With no normalization downstream, that saturated DirectionHead's sigmoid
+    output (std collapsed to 0.00045) despite g itself being diverse. This
+    test constructs two events with the same PER-PULSE feature distribution
+    but very different pulse counts and checks pool_norm keeps ||g||
+    comparable regardless -- before the fix, this ratio was ~7x; after, it
+    should be close to 1."""
+    torch.manual_seed(0)
+    encoder = PETEncoder(d=16, L=2, k=4)
+    small_event = torch.randn(5, 16)
+    large_event = small_event.repeat(20, 1)[:100]  # same per-pulse distribution, 20x more pulses
+    x = torch.cat([small_event, large_event], dim=0)
+    batch = torch.cat([torch.zeros(5, dtype=torch.long), torch.ones(100, dtype=torch.long)])
+
+    from torch_geometric.nn import global_add_pool, global_max_pool, global_mean_pool
+    pooled = torch.cat([
+        global_mean_pool(x, batch), global_max_pool(x, batch), global_add_pool(x, batch),
+    ], dim=-1)
+    g = encoder.pool_norm(encoder.pool_proj(pooled))
+    norms = g.norm(dim=-1)
+    ratio = (norms.max() / norms.min()).item()
+    assert ratio < 2.0, (
+        f"g's norm still scales with event size (ratio={ratio:.2f}x between a 5-pulse and "
+        "100-pulse event) -- pool_norm isn't standardizing the pooled embedding's magnitude"
+    )
+
+
 def test_pet_encoder_encode_event_shape(tiny_pyg_batch):
     encoder = PETEncoder(d=16, L=2, k=4)
     n_events = int(tiny_pyg_batch.batch.max().item()) + 1
