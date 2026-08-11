@@ -6,7 +6,18 @@ model:
 
 training:
   batch_size: 256
-  lr: 1.0e-3
+  # 1e-3 (was): confirmed via a controlled A/B on real data, reproducing
+  # production's actual cosine schedule shape (total_steps=312,504, so LR
+  # barely decays across the first several thousand steps -- a schedule
+  # that itself decays to ~0 within the short test horizon was tried first
+  # and failed to reproduce the collapse at all), that 1e-3 causes a sudden
+  # over-smoothing phase transition: node embedding cross-sample std stayed
+  # healthy for ~2,200 steps then collapsed 500x within ~200 more, even
+  # with LR warmup AND LayerScale (models/pet.py's PETBlock) both applied.
+  # 2e-4 (5x lower), combined with the same warmup+LayerScale, stayed
+  # healthy (std 0.31-0.65) through a full 8,000-step test -- 3.5x past
+  # where the unfixed combination had already collapsed.
+  lr: 2.0e-4
   weight_decay: 0.05
   # 100 was a nominal/never-reachable cap (~9 days of A100 time at measured
   # throughput). It also silently neutered the cosine LR schedule added
@@ -35,24 +46,19 @@ data:
 
 logging:
   project: neutrinojepa
-  run_name: pretrain_mae_v5
+  run_name: pretrain_mae_v6
 
 checkpoint:
-  # v5, not v4: v4's checkpoints were trained with NO LR warmup -- the
-  # cosine schedule started at full peak LR (1e-3) on step 1. Confirmed via
-  # a controlled A/B on real data (same seed/data/architecture/step count,
-  # only the warmup differed) that this alone collapses PETEncoder's node
-  # embedding cross-sample std from a healthy 0.68 at init to 0.004 within
-  # 20 real AdamW steps, and it never recovered (0.0004 by step 20,426 in
-  # the real v4 run) -- independent of and prior to the separate
-  # LayerNorm-gain-decay collapse v4 already fixed (gains were confirmed
-  # stable at ~1.0 throughout v4's whole run, yet predictions were still
-  # exactly constant: pred std=0.00000 for both time and charge). A
-  # 100-step linear warmup under otherwise identical conditions kept std
-  # 60-100x higher throughout and reached a genuinely lower loss. See
-  # train/optim.py's warmup_cosine_lr_lambda for the full mechanism.
-  # v4 followed v3 (LayerNorm-gain decay from weight_decay), which followed
-  # v2 (collapsed-ReLU dead units). Starting fresh keeps the diagnostic
-  # clean each time -- v4's checkpoints are not safe to resume from.
-  dirpath: checkpoints/pretrain_mae_v5/
+  # v6, not v5: v5 added LR warmup alone, which only delayed the collapse
+  # (healthy for ~2,200 steps, then a sudden 500x drop in node embedding
+  # diversity within ~200 more) rather than preventing it -- confirmed on
+  # the real v5 run itself (pred std=0.00000 again by step 4,313) and
+  # reproduced in a controlled A/B. v6 adds the two-part real fix:
+  # LayerScale (models/pet.py's PETBlock) plus a 5x lower peak LR (see
+  # training.lr above) -- both held healthy through a full 8,000-step
+  # controlled test. v5 followed v4 (missing LR warmup entirely), which
+  # followed v3 (LayerNorm-gain decay from weight_decay), which followed v2
+  # (collapsed-ReLU dead units). Starting fresh keeps the diagnostic clean
+  # each time -- v5's checkpoints are not safe to resume from.
+  dirpath: checkpoints/pretrain_mae_v6/
   filename: "epoch{epoch:04d}-step{step:09d}"

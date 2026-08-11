@@ -13,7 +13,7 @@ class PETBlock(nn.Module):
     applied directly per-edge on a knn graph built with torch_cluster.
     """
 
-    def __init__(self, d: int, k: int = 8):
+    def __init__(self, d: int, k: int = 8, layerscale_init: float = 1e-2):
         super().__init__()
         self.d = d
         self.k = k
@@ -37,6 +37,33 @@ class PETBlock(nn.Module):
         self.ffn = nn.Sequential(
             nn.Linear(d, 4 * d), nn.GELU(), nn.Linear(4 * d, d)
         )
+        # LayerScale (CaiT-style small learnable per-channel gate, init near
+        # zero) on each sublayer's contribution before the residual add.
+        # Root cause this mitigates, confirmed with a controlled A/B on real
+        # data reproducing production's exact LR schedule shape (peak
+        # lr=1e-3 held near-constant for thousands of steps, matching
+        # Trainer.estimated_stepping_batches=312,504 -- NOT a schedule that
+        # itself decays over the short test horizon, which was tried first
+        # and failed to reproduce the collapse at all): attention degenerates
+        # to near-uniform softmax over the k-NN neighborhood from early in
+        # training (measured directly: entropy ratio to max-possible reaches
+        # 1.0000, i.e. alpha ~= 1/k for every edge, by block 2 in a real
+        # checkpoint), making x_attn functionally an unweighted local mean.
+        # Applied at full residual strength through all 6 stacked blocks,
+        # this is a textbook GNN over-smoothing setup, and it manifests as a
+        # sudden phase transition, not a gradual drift: node embedding
+        # cross-sample std stayed healthy (0.14-0.23) for ~2,200 steps then
+        # collapsed 500x within ~200 more steps, in both the LR-warmup-only
+        # run (real production run pretrain_mae_v5) and a warmup+no-LayerScale
+        # reproduction. LayerScale alone only delayed this (collapsed by
+        # ~step 4,600 instead of ~2,400) -- NOT sufficient by itself, see
+        # configs/pretrain_mae.yaml for the second half of the real fix
+        # (lower peak LR). Combined with a 5x lower peak LR (1e-3 -> 2e-4),
+        # both held healthy (node_emb std 0.31-0.65, pred std 0.02-0.09)
+        # through a full 8,000-step test -- 3.5x past where the unfixed
+        # combination had already collapsed.
+        self.gamma1 = nn.Parameter(torch.full((d,), layerscale_init))
+        self.gamma2 = nn.Parameter(torch.full((d,), layerscale_init))
 
     def forward(self, x: Tensor, batch: Tensor, batch_size: int | None = None) -> Tensor:
         n = x.shape[0]
@@ -63,8 +90,8 @@ class PETBlock(nn.Module):
         alpha = scatter_softmax(scores, dst, dim=0, dim_size=n)
         x_attn = scatter_sum(alpha.unsqueeze(-1) * V, dst, dim=0, dim_size=n)
 
-        x = self.norm1(x + x_attn)
-        x = self.norm2(x + self.ffn(x))
+        x = self.norm1(x + self.gamma1 * x_attn)
+        x = self.norm2(x + self.gamma2 * self.ffn(x))
         return x
 
 

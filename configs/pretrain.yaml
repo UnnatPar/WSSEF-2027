@@ -11,7 +11,14 @@ masking:
 
 training:
   batch_size: 256
-  lr: 1.0e-3
+  # 2e-4, not 1e-3: proactive, same reasoning as configs/pretrain_mae.yaml's
+  # training.lr -- NeutrinoJEPA shares the same PETEncoder (models/pet.py)
+  # that was confirmed, via a controlled A/B on real data reproducing this
+  # config's own cosine schedule shape, to hit a sudden over-smoothing
+  # collapse at lr=1e-3 even with LR warmup and LayerScale both applied.
+  # This experiment hasn't run in production yet this session, but there's
+  # no reason to expect it's immune to the same architecture-level failure.
+  lr: 2.0e-4
   weight_decay: 0.05
   epochs: 100
   grad_clip: 1.0

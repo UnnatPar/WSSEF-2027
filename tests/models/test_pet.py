@@ -39,6 +39,34 @@ def test_pet_block_handles_k_larger_than_event_size():
     assert out.shape == (5, 16)
 
 
+def test_pet_block_has_layerscale_params_initialized_small():
+    """Root cause fixed by LayerScale, confirmed via a controlled A/B on
+    real data with production's actual LR schedule shape: with no
+    LayerScale, sustained near-peak LR (matching the real cosine schedule,
+    which barely decays across thousands of steps out of a 312,504-step
+    horizon) drives attention to near-uniform softmax over the k-NN
+    neighborhood, and applying that at full residual strength through all 6
+    stacked blocks causes a sudden over-smoothing collapse (node embedding
+    cross-sample std dropped 500x within ~200 steps after ~2,200 healthy
+    steps). LayerScale gates each sublayer's contribution with a small
+    learnable per-channel scale, starting near zero so the residual
+    dominates until training earns the right to mix -- see models/pet.py's
+    PETBlock docstring for the full A/B evidence."""
+    block = PETBlock(d=16, k=4)
+    assert torch.allclose(block.gamma1, torch.full((16,), 1e-2))
+    assert torch.allclose(block.gamma2, torch.full((16,), 1e-2))
+
+
+def test_pet_block_layerscale_gradients_flow():
+    block = PETBlock(d=16, k=4)
+    x = torch.randn(20, 16, requires_grad=True)
+    batch = torch.zeros(20, dtype=torch.long)
+    out = block(x, batch)
+    out.sum().backward()
+    assert block.gamma1.grad is not None
+    assert block.gamma2.grad is not None
+
+
 def test_pet_encoder_forward_shape(tiny_pyg_batch):
     encoder = PETEncoder(d=16, L=2, k=4)
     out = encoder(tiny_pyg_batch.x, tiny_pyg_batch.batch)
