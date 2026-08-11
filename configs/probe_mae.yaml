@@ -12,10 +12,21 @@ training:
   weight_decay: 0.05
   epochs: 30
   grad_clip: 1.0
-  num_workers: 4
+  # 4 -> 2: running probe and finetune concurrently on the same box, each
+  # with num_workers=4 persistent parquet-caching workers (8 total), grew
+  # real memory usage from ~1.5GB to 123GB/216GB over several hours and
+  # OOM-killed one of probe's dataloader workers mid-validation
+  # ("DataLoader worker exited unexpectedly"). 2 halves the persistent
+  # worker/cache footprint per job.
+  num_workers: 2
   lambda_direction: 1.0
   lambda_classification: 0.5
   early_stopping_patience: 5
+  # See configs/finetune_mae.yaml's training.direction_warmup_steps for the
+  # full mechanism -- SupervisedFineTune's direction_head/kappa_head are
+  # freshly initialized here too (only the encoder is loaded from a
+  # checkpoint), so the same cold-start vMF collapse applies.
+  direction_warmup_steps: 3000
 
 data:
   max_pulses: 256

@@ -13,10 +13,18 @@ training:
   weight_decay: 0.05
   epochs: 50
   grad_clip: 1.0
-  num_workers: 4
+  # 4 -> 2: see configs/probe_mae.yaml's training.num_workers comment --
+  # running multiple of these jobs concurrently at num_workers=4 each
+  # OOM-killed a worker.
+  num_workers: 2
   lambda_direction: 1.0
   lambda_classification: 0.5
   early_stopping_patience: 5
+  # See configs/finetune_mae.yaml's training.direction_warmup_steps for the
+  # full mechanism -- direction_head/kappa_head are freshly initialized
+  # here (same as everywhere else SupervisedFineTune is used), so the same
+  # cold-start vMF collapse applies.
+  direction_warmup_steps: 3000
 
 data:
   max_pulses: 256
@@ -29,17 +37,14 @@ data:
 
 logging:
   project: neutrinojepa
-  run_name: scratch_v2
+  run_name: scratch_v3
 
 checkpoint:
-  # v2, not v1: v1's checkpoints were trained with pool_proj's output fed
-  # unnormalized straight into direction_head/kappa_head -- global_add_pool
-  # inside encode_event() makes the pooled embedding's magnitude scale
-  # almost linearly with event size (measured r=0.98 correlation, norm 76 at
-  # 25 pulses vs 512-604 at 256 pulses across 256 real events), which
-  # saturated direction_head's sigmoid and collapsed its output to a
-  # near-constant (std=0.00045) within the first few thousand steps. See
-  # models/pet.py's PETEncoder.pool_norm for the fix. Starting fresh keeps
-  # the diagnostic clean -- v1's checkpoints are not safe to resume from.
-  dirpath: checkpoints/scratch_v2/
+  # v3, not v2: v2 fixed the pool_norm saturation issue but still hit a
+  # second, separate collapse -- raw vMF loss from a cold direction_head/
+  # kappa_head, now fixed by training.direction_warmup_steps above. v2
+  # followed v1 (pool_proj fed unnormalized into direction_head, see
+  # models/pet.py's PETEncoder.pool_norm). Starting fresh keeps the
+  # diagnostic clean -- v2's checkpoints are not safe to resume from.
+  dirpath: checkpoints/scratch_v3/
   filename: "epoch{epoch:04d}-step{step:09d}"

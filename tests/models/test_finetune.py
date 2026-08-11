@@ -17,6 +17,11 @@ def make_cfg(**overrides):
     return SimpleNamespace(**base)
 
 
+class _FakeTrainer:
+    def __init__(self, global_step=0):
+        self.global_step = global_step
+
+
 def make_labeled_batch(with_pid=False):
     g = torch.Generator().manual_seed(0)
     events = [Data(x=torch.rand(n, 6, generator=g)) for n in [12, 18, 9]]
@@ -107,6 +112,68 @@ def test_build_supervised_model_loads_encoder_weights_from_jepa_checkpoint(tmp_p
     ):
         assert torch.equal(jepa_param, loaded_param)
     assert all(not p.requires_grad for p in supervised_model.encoder.parameters())
+
+
+def test_cos_distance_loss_used_during_warmup_kappa_head_gets_no_gradient():
+    """Root cause fixed by direction_warmup_steps, confirmed on a real run
+    (mae_finetune_v1, step 74,301): raw vMF loss from a cold direction_head/
+    kappa_head collapsed az/zen to an exact constant. During warmup, the
+    loss must be pure cos-distance (kappa never enters the loss graph at
+    all), so kappa_head gets literally zero gradient -- same mechanism as
+    pool_proj legitimately getting no gradient during MAE pretraining.
+
+    Calls _compute_loss directly, not training_step: self.log() (called
+    inside training_step) needs a fully-real Trainer or none at all -- our
+    minimal _FakeTrainer stub only satisfies the global_step read this
+    warmup logic needs, and breaks self.log()'s own internals, same
+    constraint noted in tests/models/test_jepa.py."""
+    model = SupervisedFineTune(make_cfg(direction_warmup_steps=1000))
+    model.trainer = _FakeTrainer(global_step=0)
+    batch = make_labeled_batch(with_pid=False)
+    n_events = int(batch.batch.max().item()) + 1
+    g, az, zen, kappa = model._forward(batch, batch_size=n_events)
+    loss = model._compute_loss(batch, g, az, zen, kappa)
+    loss.backward()
+    assert all(p.grad is None for p in model.kappa_head.parameters())
+    assert all(p.grad is not None for p in model.direction_head.parameters())
+
+
+def test_vmf_loss_used_after_warmup_kappa_head_gets_gradient():
+    model = SupervisedFineTune(make_cfg(direction_warmup_steps=1000))
+    model.trainer = _FakeTrainer(global_step=1000)
+    batch = make_labeled_batch(with_pid=False)
+    n_events = int(batch.batch.max().item()) + 1
+    g, az, zen, kappa = model._forward(batch, batch_size=n_events)
+    loss = model._compute_loss(batch, g, az, zen, kappa)
+    loss.backward()
+    assert all(p.grad is not None for p in model.kappa_head.parameters())
+
+
+def test_direction_warmup_defaults_to_zero_when_cfg_lacks_the_field():
+    """Backward compatibility: a cfg without direction_warmup_steps at all
+    (e.g. an old config not yet updated) must behave exactly as before --
+    immediate vMF loss, kappa_head gets gradient from step 0."""
+    model = SupervisedFineTune(make_cfg())  # no direction_warmup_steps key
+    assert not hasattr(model.cfg, "direction_warmup_steps")
+    model.trainer = _FakeTrainer(global_step=0)
+    batch = make_labeled_batch(with_pid=False)
+    n_events = int(batch.batch.max().item()) + 1
+    g, az, zen, kappa = model._forward(batch, batch_size=n_events)
+    loss = model._compute_loss(batch, g, az, zen, kappa)
+    loss.backward()
+    assert all(p.grad is not None for p in model.kappa_head.parameters())
+
+
+def test_compute_loss_without_trainer_attached_still_uses_vmf_loss():
+    """Preserves every pre-existing test in this file that calls
+    training_step directly without ever setting model.trainer -- accessing
+    self.trainer with no real Trainer attached raises in Lightning, which
+    must be caught and treated as global_step=None, i.e. past warmup."""
+    model = SupervisedFineTune(make_cfg(direction_warmup_steps=1000))
+    batch = make_labeled_batch(with_pid=False)
+    loss = model.training_step(batch, batch_idx=0)
+    loss.backward()
+    assert all(p.grad is not None for p in model.kappa_head.parameters())
 
 
 def test_build_supervised_model_tolerates_a_checkpoint_missing_pool_norm(tmp_path):

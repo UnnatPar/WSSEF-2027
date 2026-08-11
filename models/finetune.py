@@ -83,15 +83,52 @@ class SupervisedFineTune(pl.LightningModule):
 
     def _compute_loss(self, batch, g, az, zen, kappa):
         pred_vec = to_cartesian(az, zen)
-        pred = torch.cat([pred_vec, kappa], dim=-1)
         true_vec = to_cartesian(batch.azimuth, batch.zenith)
 
-        # graphnet's VonMisesFisher3DLoss.log_cmk mixes its two internal branches
-        # (log_cmk_approx, log_cmk_exact) in an index_put -- under AMP autocast
-        # they land in different dtypes (bf16 vs fp32) and the assignment throws.
-        # Verified by direct testing on a real training step, not a fixture.
-        with torch.autocast(device_type=pred.device.type, enabled=False):
-            direction_loss = self.direction_loss_fn(pred.float(), true_vec.float())
+        # Staged direction loss -- root cause fixed here, confirmed directly
+        # on a real run (mae_finetune_v1, step 74,301): raw vMF loss applied
+        # end-to-end from a cold (randomly initialized) direction_head/
+        # kappa_head collapsed az/zen predictions to an exact constant
+        # (std=0.0000), even though the encoder underneath was already
+        # healthy and non-collapsed (a warm-started, real MAE-pretrained
+        # encoder didn't help -- direction_head/kappa_head are separate,
+        # freshly-initialized modules on top of it, so they hit the same
+        # cold-start dynamics regardless). Mechanism: whenever a fresh
+        # direction_head's predictions are worse than random
+        # (cos(Delta theta) < 0, near-universal at cold start), the vMF loss
+        # term -kappa*cos(Delta theta) is genuinely minimized by shrinking
+        # kappa toward zero -- a real, mathematically correct gradient
+        # signal, not a bug -- which drags direction_head's own gradient
+        # down with it (the vMF loss's gradient w.r.t. direction scales with
+        # kappa), creating a self-reinforcing trap: direction can't improve
+        # without gradient, kappa won't rise without better direction. The
+        # actual IceCube Kaggle competition winners hit and solved this
+        # exact problem (arXiv:2310.15674): the 2nd place team used a plain
+        # angular-distance loss for the first 2-3 epochs before blending in
+        # vMF; the 3rd place team froze the backbone and trained a
+        # classification-based direction estimate before ever training a
+        # vMF-loss regression head. direction_warmup_steps mirrors this:
+        # cos-distance loss (no kappa at all, cannot collapse this way) for
+        # the first N steps, giving direction_head a chance to learn a
+        # reasonable estimate before kappa's dynamics are introduced.
+        try:
+            global_step = self.trainer.global_step
+        except (RuntimeError, TypeError, AttributeError):
+            global_step = None
+        warmup_steps = getattr(self.cfg, "direction_warmup_steps", 0)
+
+        if global_step is not None and global_step < warmup_steps:
+            cos_sim = (pred_vec * true_vec).sum(-1)
+            direction_loss = (1 - cos_sim).mean()
+        else:
+            pred = torch.cat([pred_vec, kappa], dim=-1)
+            # graphnet's VonMisesFisher3DLoss.log_cmk mixes its two internal
+            # branches (log_cmk_approx, log_cmk_exact) in an index_put --
+            # under AMP autocast they land in different dtypes (bf16 vs
+            # fp32) and the assignment throws. Verified by direct testing on
+            # a real training step, not a fixture.
+            with torch.autocast(device_type=pred.device.type, enabled=False):
+                direction_loss = self.direction_loss_fn(pred.float(), true_vec.float())
         loss = self.cfg.lambda_direction * direction_loss
 
         if hasattr(batch, "pid"):

@@ -12,10 +12,25 @@ training:
   weight_decay: 0.05
   epochs: 50
   grad_clip: 1.0
-  num_workers: 4
+  # 4 -> 2: see configs/probe_mae.yaml's training.num_workers comment --
+  # running both concurrently at num_workers=4 each OOM-killed a worker.
+  num_workers: 2
   lambda_direction: 1.0
   lambda_classification: 0.5
   early_stopping_patience: 5
+  # Real, confirmed collapse in mae_finetune_v1 (step 74,301): raw vMF loss
+  # applied end-to-end from a cold (randomly initialized) direction_head/
+  # kappa_head collapsed az/zen predictions to an exact constant
+  # (std=0.0000) -- even with an already-healthy, non-collapsed
+  # MAE-pretrained encoder underneath, since direction_head/kappa_head are
+  # separate, freshly-initialized modules that hit the same cold-start
+  # dynamics regardless of encoder quality. See models/finetune.py's
+  # _compute_loss for the full mechanism (matches the real IceCube Kaggle
+  # winners' own documented experience, arXiv:2310.15674). For the first
+  # 3000 steps, use a plain cos-distance loss (no kappa at all, cannot
+  # collapse this way) to let direction_head learn a real signal before
+  # kappa's dynamics are introduced.
+  direction_warmup_steps: 3000
 
 data:
   max_pulses: 256
@@ -28,8 +43,11 @@ data:
 
 logging:
   project: neutrinojepa
-  run_name: mae_finetune_v1
+  run_name: mae_finetune_v2
 
 checkpoint:
-  dirpath: checkpoints/mae_finetune_v1/
+  # v2, not v1: v1's checkpoints are a product of the direction_head/
+  # kappa_head collapse fixed by training.direction_warmup_steps above --
+  # not safe to resume from.
+  dirpath: checkpoints/mae_finetune_v2/
   filename: "epoch{epoch:04d}-step{step:09d}"
