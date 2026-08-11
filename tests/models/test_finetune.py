@@ -109,6 +109,34 @@ def test_build_supervised_model_loads_encoder_weights_from_jepa_checkpoint(tmp_p
     assert all(not p.requires_grad for p in supervised_model.encoder.parameters())
 
 
+def test_build_supervised_model_tolerates_a_checkpoint_missing_pool_norm(tmp_path):
+    """Real production bug: encoder.pool_norm (models/pet.py) didn't exist
+    when earlier MAE pretrain checkpoints (e.g. pretrain_mae_v6) were saved
+    -- MAE pretraining calls encoder.forward() directly and never touches
+    encode_event()/pool_proj/pool_norm at all. build_supervised_model's
+    encoder load used to be strict, which made loading any such checkpoint
+    crash with "Missing key(s): pool_norm.weight, pool_norm.bias" --
+    confirmed directly, this broke both probe.py and finetune.py against a
+    real v6 checkpoint. Simulates that exact old-format checkpoint here
+    (PETEncoder's own state_dict with pool_norm keys stripped) and checks
+    loading succeeds, leaving pool_norm at its fresh init."""
+    from models.pet import PETEncoder
+
+    encoder = PETEncoder(d=16, L=2, k=4)
+    stale_state = {k: v for k, v in encoder.state_dict().items() if not k.startswith("pool_norm")}
+    ckpt_path = tmp_path / "old_mae_ckpt.pt"
+    torch.save({"state_dict": {f"encoder.{k}": v for k, v in stale_state.items()}}, ckpt_path)
+
+    model = build_supervised_model(make_cfg(freeze_encoder=True), str(ckpt_path))
+
+    for name, param in stale_state.items():
+        assert torch.equal(param, model.encoder.state_dict()[name])
+    # pool_norm wasn't in the checkpoint -- must still exist at its fresh,
+    # untouched init (LayerNorm defaults: weight=1, bias=0), not crash.
+    assert torch.equal(model.encoder.pool_norm.weight, torch.ones(16))
+    assert torch.equal(model.encoder.pool_norm.bias, torch.zeros(16))
+
+
 def test_load_full_checkpoint_restores_heads_not_just_encoder(tmp_path):
     trained = SupervisedFineTune(make_cfg())
     with torch.no_grad():

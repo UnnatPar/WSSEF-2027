@@ -172,7 +172,20 @@ def build_supervised_model(cfg, checkpoint_path: str | None) -> SupervisedFineTu
             for k, v in checkpoint["state_dict"].items()
             if k.startswith("encoder.")
         }
-        model.encoder.load_state_dict(encoder_state)
+        # strict=False: encoder.pool_norm didn't exist when earlier MAE
+        # pretrain checkpoints (e.g. pretrain_mae_v6) were saved -- MAE
+        # pretraining calls encoder.forward() directly and never touches
+        # encode_event()/pool_proj/pool_norm at all, so those checkpoints
+        # correctly have no gradient-trained values for pool_norm to give
+        # here. Missing keys just mean pool_norm starts at its fresh
+        # (identity-like) init, same as pool_proj already silently does for
+        # every MAE checkpoint regardless of this fix. See models/pet.py's
+        # PETEncoder.pool_norm docstring for why it was added.
+        missing, unexpected = model.encoder.load_state_dict(encoder_state, strict=False)
+        assert not unexpected, f"unexpected keys in encoder checkpoint: {unexpected}"
+        assert set(missing) <= {"pool_norm.weight", "pool_norm.bias"}, (
+            f"unexpected missing keys in encoder checkpoint: {missing}"
+        )
         if cfg.freeze_encoder:
             for p in model.encoder.parameters():
                 p.requires_grad_(False)
