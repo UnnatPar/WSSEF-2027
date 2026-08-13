@@ -43,7 +43,28 @@ training:
   # direction_head/kappa_head are freshly initialized here (same as
   # everywhere else SupervisedFineTune is used), so the same cold-start vMF
   # collapse applies.
-  direction_warmup_steps: 3000
+  #
+  # direction_warmup_steps: 3000 -> 10000, confirmed necessary here, not
+  # just precautionary: scratch_v6 (same 3000-step warmup, same
+  # vmf_blend_weight=0.05 -- both previously validated for tens of thousands
+  # of steps on scratch_v4's JOINT DirectionHead) collapsed by step ~39,065
+  # under the NEW split-branch DirectionHead -- direct checkpoint inspection
+  # showed zenith predictions collapsed to near-zero (std=0.0483,
+  # pre-sigmoid mean=-12.07, all strongly negative) and kappa pinned at its
+  # floor (mean=1.0079, std=0.0000), the same self-reinforcing
+  # kappa-shrinks-then-drags-direction-gradient-down mechanism documented
+  # throughout this project, just relocated. scratch_v4's joint head never
+  # showed this failure at the same warmup/blend settings even after
+  # 160k+ steps (confirmed via probe3's kappa-freeze A/B, which found kappa
+  # still healthy that late) -- most likely explanation: azimuth's
+  # healthier gradient was incidentally propping up zenith through
+  # DirectionHead's formerly-shared parameters, and removing that sharing
+  # (the head-split fix, itself well-evidenced, see checkpoint dir comment
+  # below) left the now-isolated zen_branch free to collapse into the same
+  # trap on its own. A much longer pure-cos-distance warmup gives the
+  # weaker, unprotected branch more time to reach a solid state before any
+  # vMF pressure (even at low blend weight) is introduced.
+  direction_warmup_steps: 10000
   vmf_blend_weight: 0.05
 
 data:
@@ -57,23 +78,24 @@ data:
 
 logging:
   project: neutrinojepa
-  run_name: scratch_v6
+  run_name: scratch_v7
 
 checkpoint:
-  # v6, not v5: v5 launched missing one confirmed fix -- explicit aux_frac
-  # concatenated onto g before the heads (models/finetune.py). aux_frac was
-  # the single strongest predictor in scratch_v4's error breakdown (26 deg
-  # spread) yet zeroing the raw `aux` feature only cost 3.39 deg, meaning the
-  # model wasn't extracting nearly as much signal from it as was available --
-  # caught and fixed before v5 accumulated much real training, so v5 was
-  # killed rather than let run to a real result missing a known fix. v5's
+  # v7, not v6: v6 (split DirectionHead, L=4, k=12, dropped mean-pool,
+  # explicit aux_frac, fixed checkpoint monitor) collapsed by step ~39,065 --
+  # zenith and kappa both pinned dead, see training.direction_warmup_steps'
+  # comment above for the full diagnosis and why direction_warmup_steps
+  # 3000 -> 10000 is this version's only change. v6's two epoch-end
+  # validations (87.92, 87.92 deg -- flat, matching the collapse) are not
+  # real results and v6's checkpoints are not safe to resume from. v6's
   # other four changes carry over unchanged: ModelCheckpoint now actually
   # tracks val/angular_error (v4's real best checkpoint, 65.63 deg, was
   # silently overwritten by this exact bug); DirectionHead split into
   # separate az/zen branches (+18.9 deg zenith interference confirmed via
-  # direct A/B); encode_event's mean-pool branch dropped (confirmed
-  # zero-cost ablation); k 8->12, L 6->4. v4 and earlier are not safe to
-  # resume from (see prior checkpoint dirs' own comments for their specific
-  # collapse histories).
-  dirpath: checkpoints/scratch_v6/
+  # direct A/B, still the right fix -- v6's failure was a warmup-length gap
+  # exposed by the split, not evidence the split itself was wrong);
+  # encode_event's mean-pool branch dropped (confirmed zero-cost ablation);
+  # k 8->12, L 6->4; explicit aux_frac concatenated onto g. v6 and earlier
+  # are not safe to resume from.
+  dirpath: checkpoints/scratch_v7/
   filename: "epoch{epoch:04d}-step{step:09d}"
