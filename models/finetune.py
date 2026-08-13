@@ -3,6 +3,7 @@ import torch
 import torch.nn.functional as F
 from graphnet.training.loss_functions import VonMisesFisher3DLoss
 from torch import nn
+from torch_geometric.nn import global_mean_pool
 
 from eval.metrics import mean_angular_error, to_cartesian
 from models.heads import ClassificationHead, DirectionHead
@@ -32,9 +33,23 @@ class SupervisedFineTune(pl.LightningModule):
         super().__init__()
         self.cfg = cfg
         self.encoder = PETEncoder(cfg.d, cfg.L, cfg.k)
-        self.direction_head = DirectionHead(cfg.d)
-        self.classification_head = ClassificationHead(cfg.d)
-        self.kappa_head = nn.Linear(cfg.d, 1)
+        # cfg.d + 1, not cfg.d: an explicit event-level aux_frac (fraction of
+        # "auxiliary"/less-certain pulses, see _forward) is concatenated onto
+        # g before it reaches any head. Root cause fixed here, confirmed
+        # directly on scratch_v4's checkpoint: aux_frac was the single
+        # strongest predictor in the whole error breakdown (26 deg spread,
+        # 50.6 deg at low aux_frac vs 76.5 deg at high), yet zeroing the raw
+        # per-pulse `aux` feature only cost 3.39 deg in ablation -- the model
+        # has access to real, highly predictive signal here and mostly isn't
+        # using it. Root cause: aux only ever reaches the heads as a raw
+        # per-pulse 0/1 flag that has to survive mean/max/add pooling across
+        # an event, which is a lossy path for recovering a clean fraction/
+        # rate statistic (sum-pooling in particular gives a count, confounded
+        # with n_pulses, not a rate). Handing the heads the already-computed
+        # ratio directly removes that reconstruction burden.
+        self.direction_head = DirectionHead(cfg.d + 1)
+        self.classification_head = ClassificationHead(cfg.d + 1)
+        self.kappa_head = nn.Linear(cfg.d + 1, 1)
         self.direction_loss_fn = VonMisesFisher3DLoss()
 
         if cfg.freeze_encoder:
@@ -43,6 +58,12 @@ class SupervisedFineTune(pl.LightningModule):
 
     def _forward(self, batch, batch_size: int | None = None):
         g = self.encoder.encode_event(batch.x, batch.batch, batch_size=batch_size)
+        # column 5 = auxiliary flag (see train/dataset.py's FEATURE_COLUMNS +
+        # the appended auxiliary column) -- see __init__'s comment for why
+        # this is appended explicitly rather than left for the encoder to
+        # reconstruct implicitly.
+        aux_frac = global_mean_pool(batch.x[:, 5:6], batch.batch, size=batch_size)
+        g = torch.cat([g, aux_frac], dim=-1)
         az, zen = self.direction_head(g)
         # Softplus(x) underflows to exactly 0.0 for a sufficiently negative
         # pre-activation -- easier to hit than it sounds under precision=

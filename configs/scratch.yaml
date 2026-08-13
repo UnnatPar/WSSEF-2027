@@ -57,21 +57,23 @@ data:
 
 logging:
   project: neutrinojepa
-  run_name: scratch_v5
+  run_name: scratch_v6
 
 checkpoint:
-  # v5, not v4: v4 reached 65.63 deg (epoch 6) then genuinely plateaued/
-  # regressed (67.19 deg by epoch 7) -- stopped deliberately, not a crash.
-  # This version batches every fix the resulting probe battery justified:
-  # ModelCheckpoint now actually tracks val/angular_error (train/
-  # supervised.py) instead of just keeping whatever was saved last -- v4's
-  # real best checkpoint (65.63 deg) was silently overwritten by this exact
-  # bug, so every v4-era probe ran against a worse, post-regression
-  # checkpoint. DirectionHead split into separate az/zen branches (models/
-  # heads.py, +18.9 deg zenith interference confirmed via direct A/B).
-  # encode_event's mean-pool branch dropped (models/pet.py, confirmed
-  # zero-cost ablation). k 8->12, L 6->4 (both above). v3 and earlier are
-  # not safe to resume from (see prior checkpoint dirs' own comments for
-  # their specific collapse histories).
-  dirpath: checkpoints/scratch_v5/
+  # v6, not v5: v5 launched missing one confirmed fix -- explicit aux_frac
+  # concatenated onto g before the heads (models/finetune.py). aux_frac was
+  # the single strongest predictor in scratch_v4's error breakdown (26 deg
+  # spread) yet zeroing the raw `aux` feature only cost 3.39 deg, meaning the
+  # model wasn't extracting nearly as much signal from it as was available --
+  # caught and fixed before v5 accumulated much real training, so v5 was
+  # killed rather than let run to a real result missing a known fix. v5's
+  # other four changes carry over unchanged: ModelCheckpoint now actually
+  # tracks val/angular_error (v4's real best checkpoint, 65.63 deg, was
+  # silently overwritten by this exact bug); DirectionHead split into
+  # separate az/zen branches (+18.9 deg zenith interference confirmed via
+  # direct A/B); encode_event's mean-pool branch dropped (confirmed
+  # zero-cost ablation); k 8->12, L 6->4. v4 and earlier are not safe to
+  # resume from (see prior checkpoint dirs' own comments for their specific
+  # collapse histories).
+  dirpath: checkpoints/scratch_v6/
   filename: "epoch{epoch:04d}-step{step:09d}"

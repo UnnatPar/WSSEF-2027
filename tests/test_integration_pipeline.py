@@ -54,11 +54,18 @@ def make_supervised_cfg(freeze_encoder):
 
 
 def _probe_forward_and_eval(model, loader):
+    # Calls model._forward directly rather than reimplementing the pooling +
+    # head-input assembly here -- a hand-rolled duplicate of that logic
+    # (calling model.direction_head(model.encoder.encode_event(...)) inline)
+    # silently drifted out of sync with a real production change (the
+    # explicit aux_frac feature SupervisedFineTune._forward now concatenates
+    # onto g before any head sees it), breaking this test for a reason
+    # unrelated to what it's actually meant to check.
     batch = next(iter(loader))
+    n_events = int(batch.batch.max().item()) + 1
     with torch.no_grad():
-        g = model.encoder.encode_event(batch.x, batch.batch)
-    az, zen = model.direction_head(g)
-    cls_logits = model.classification_head(g)
+        g, az, zen, _ = model._forward(batch, batch_size=n_events)
+        cls_logits = model.classification_head(g)
     assert az.shape == zen.shape == (g.shape[0],)
     assert cls_logits.shape == (g.shape[0], 1)
     true_az = torch.rand(g.shape[0]) * 6.28
