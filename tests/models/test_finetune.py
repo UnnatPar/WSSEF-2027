@@ -17,6 +17,19 @@ def make_cfg(**overrides):
     return SimpleNamespace(**base)
 
 
+def test_direction_head_split_defaults_off_but_respects_cfg():
+    """split_direction_head defaults to False (joint head) when a config
+    doesn't set it -- real regression found when applying split=True
+    unconditionally to the from-scratch (fully cold-start) regime, see
+    models/heads.py's DirectionHead docstring. mae_finetune/jepa_finetune
+    configs opt in explicitly via split_direction_head: true."""
+    model_default = SupervisedFineTune(make_cfg())
+    assert not model_default.direction_head.split
+
+    model_split = SupervisedFineTune(make_cfg(split_direction_head=True))
+    assert model_split.direction_head.split
+
+
 class _FakeTrainer:
     def __init__(self, global_step=0, estimated_stepping_batches=1000):
         self.global_step = global_step

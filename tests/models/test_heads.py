@@ -39,6 +39,41 @@ def test_classification_head_gradients_flow():
     assert x.grad is not None
 
 
+def test_direction_head_defaults_to_joint_not_split():
+    head = DirectionHead(d=16)
+    assert not head.split
+    assert hasattr(head, "mlp")
+    assert not hasattr(head, "az_branch")
+
+
+def test_direction_head_split_mode_has_no_shared_parameters():
+    """split=True: az_branch and zen_branch must not share any parameters --
+    the whole point of the split (see DirectionHead's docstring) is
+    eliminating shared-parameter gradient conflict between az and zen."""
+    head = DirectionHead(d=16, split=True)
+    assert head.split
+    az_ids = {id(p) for p in head.az_branch.parameters()}
+    zen_ids = {id(p) for p in head.zen_branch.parameters()}
+    assert az_ids.isdisjoint(zen_ids)
+
+    x = torch.randn(32, 16)
+    az, zen = head(x)
+    assert az.shape == (32,)
+    assert zen.shape == (32,)
+    assert (az >= 0).all() and (az <= 2 * math.pi).all()
+    assert (zen >= 0).all() and (zen <= math.pi).all()
+
+
+def test_direction_head_split_mode_gradients_flow():
+    head = DirectionHead(d=16, split=True)
+    x = torch.randn(8, 16, requires_grad=True)
+    az, zen = head(x)
+    (az.sum() + zen.sum()).backward()
+    assert x.grad is not None
+    assert any(p.grad is not None for p in head.az_branch.parameters())
+    assert any(p.grad is not None for p in head.zen_branch.parameters())
+
+
 def test_direction_head_output_diversity_survives_wildly_different_input_scales():
     """Root cause fixed by LayerNorm inside DirectionHead.mlp, confirmed
     directly on a real run (scratch_v3, step 30,922): az/zen collapsed to

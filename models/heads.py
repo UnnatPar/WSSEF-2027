@@ -30,32 +30,56 @@ def _direction_branch(d: int) -> nn.Sequential:
 class DirectionHead(nn.Module):
     """(B, d) -> (B,), (B,): predicted (azimuth, zenith) in radians.
 
-    Separate az/zen branches, no shared parameters -- root cause fixed here,
-    confirmed by a direct A/B test on a real trained checkpoint
-    (scratch_v4, epoch 8): a matched-capacity zenith-only head trained on the
+    split=True: separate az/zen branches, no shared parameters. Directly
+    confirmed by an A/B test on scratch_v4's checkpoint (frozen, already-
+    trained encoder): a matched-capacity zenith-only head trained on the
     same frozen encoder embeddings reached 27.50 deg MAE vs the joint head's
     46.41 deg (+18.91 deg of pure interference cost; azimuth barely affected,
     +1.49 deg). A follow-up gradient-attribution test ruled out the shared
     trunk embedding `g` as the site of conflict (grad_az/grad_zen showed
-    near-1.0 magnitude ratio and ~0 cosine similarity, i.e. no real fight at
-    that point) -- pointing the mechanism specifically at DirectionHead's own
-    shared parameters (the pre-split MLP layers), which is what this split
-    removes. Physically sensible too: a companion per-layer probe showed
-    zenith is almost entirely recoverable from `input_proj` alone (32.68 deg,
-    only 4.8 deg from its post-encoder value), while azimuth needs the full
-    encoder depth (~90 deg through block3) -- forcing both through one
-    shared head wastes zenith's easy signal on azimuth's much harder
-    optimization.
+    near-1.0 magnitude ratio and ~0 cosine similarity) -- pointing the
+    mechanism specifically at DirectionHead's own shared parameters.
+
+    split=False (the default): the original joint head, one shared trunk
+    producing both outputs. Real regression found applying split=True
+    unconditionally: scratch_v6/v7 (encoder AND heads both cold, fully
+    random init) collapsed -- direct checkpoint inspection at step 9,551,
+    still inside pure-cos-distance warmup (kappa confirmed untouched,
+    std=0.1675, ruling out any vMF/kappa involvement), showed BOTH az and
+    zen branches already collapsing toward near-constant, deeply-saturated
+    pre-sigmoid outputs (az std=0.0114, zen std=0.0349) -- for comparison,
+    scratch_v4's joint head reached az std=2.38 by step 4,017, an order of
+    magnitude more diverse, dramatically earlier. The A/B evidence above was
+    gathered with an already-good, frozen `g`; two independently-initialized
+    branches coordinating on one joint 3D cos-similarity target through a
+    fully-random `g` (scratch's actual cold-start regime) appears to be a
+    genuinely harder problem the split evidence never covered. split=True is
+    scoped to configs where the encoder starts from a real pretrained
+    checkpoint (mae_finetune/jepa_finetune, closer to what was actually
+    tested) until re-validated for the from-scratch regime.
     """
 
-    def __init__(self, d: int = 256):
+    def __init__(self, d: int = 256, split: bool = False):
         super().__init__()
-        self.az_branch = _direction_branch(d)
-        self.zen_branch = _direction_branch(d)
+        self.split = split
+        if split:
+            self.az_branch = _direction_branch(d)
+            self.zen_branch = _direction_branch(d)
+        else:
+            self.mlp = nn.Sequential(
+                nn.Linear(d, d), nn.LayerNorm(d), nn.GELU(),
+                nn.Linear(d, d // 2), nn.LayerNorm(d // 2), nn.GELU(),
+                nn.Linear(d // 2, 2),
+            )
 
     def forward(self, x: Tensor) -> tuple[Tensor, Tensor]:
-        az = 2 * torch.pi * torch.sigmoid(self.az_branch(x).squeeze(-1))
-        zen = torch.pi * torch.sigmoid(self.zen_branch(x).squeeze(-1))
+        if self.split:
+            az = 2 * torch.pi * torch.sigmoid(self.az_branch(x).squeeze(-1))
+            zen = torch.pi * torch.sigmoid(self.zen_branch(x).squeeze(-1))
+            return az, zen
+        out = self.mlp(x)
+        az = 2 * torch.pi * torch.sigmoid(out[:, 0])
+        zen = torch.pi * torch.sigmoid(out[:, 1])
         return az, zen
 
 

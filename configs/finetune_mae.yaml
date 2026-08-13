@@ -2,8 +2,23 @@ model:
   checkpoint: checkpoints/pretrain_mae_v6/  # v6: v5's weights still collapsed (warmup alone only delayed it) -- LayerScale + 5x lower peak LR fixed it, see models/pet.py's PETBlock; resolved to the latest available *.ckpt at runtime, not hardcoded to a specific epoch
   freeze_encoder: false
   d: 256
+  # L/k left at pretrain_mae_v6's own architecture (6/8), NOT bumped to
+  # scratch's L=4/k=12 -- L determines the number of PETBlock modules in the
+  # encoder's state_dict; changing it here would break loading this
+  # checkpoint (a real shape/key-count mismatch, not something strict=False
+  # loading tolerates). Would need pretrain_mae itself retrained at L=4
+  # first (tracked separately, not done here).
   L: 6
   k: 8
+  # split_direction_head: true -- this run is now the real test of the
+  # head-split fix (see models/heads.py's DirectionHead docstring), in the
+  # regime it was actually validated for: a real pretrained (not random)
+  # encoder. scratch_v6/v7 collapsed applying split=True with a fully
+  # cold-start encoder+heads; this arm keeps the encoder's cold-start status
+  # unchanged (pretrained, unfrozen so it still continues training) while
+  # only the heads are cold-started, isolating whether split=True's benefit
+  # holds once `g` is meaningful from step 1, rather than fully random.
+  split_direction_head: true
 
 training:
   batch_size: 256
@@ -40,7 +55,22 @@ training:
   # arXiv:2310.15674 -- `opening_angle + 0.05 * vMF_loss`), so vMF can only
   # ever contribute a small calibration signal to kappa_head, never take
   # over direction_head's gradient the way a pure vMF loss can.
-  direction_warmup_steps: 3000
+  #
+  # direction_warmup_steps: 3000 -> 8000, defensive: scratch_v7's collapse
+  # happened to BOTH branches while still inside pure-cos-distance warmup,
+  # before vMF/kappa were involved at all (kappa confirmed untouched at that
+  # point) -- the failure was two freshly-initialized branches struggling to
+  # coordinate on one joint 3D target, a property of split_direction_head
+  # itself, not specific to a cold encoder. This arm's encoder starts
+  # pretrained (unlike scratch's), which should make `g` far more
+  # informative from step 1 and may avoid the problem entirely -- but since
+  # the heads are still cold either way, extra warmup margin costs little
+  # and directly targets the one confirmed failure mode. Not set as high as
+  # scratch_v7's 10000 attempt, since that extension alone did NOT fix
+  # scratch's version of this problem -- watch this run's az/zen/kappa
+  # directly near this boundary (not just the aggregate loss) rather than
+  # assume the extension alone is sufficient here either.
+  direction_warmup_steps: 8000
   vmf_blend_weight: 0.05
 
 data:
@@ -54,17 +84,18 @@ data:
 
 logging:
   project: neutrinojepa
-  run_name: mae_finetune_v4
+  run_name: mae_finetune_v5
 
 checkpoint:
-  # v4, not v3: v3 (direction-loss blend fix) still collapsed -- the
-  # encoder itself re-collapsed via GNN over-smoothing during unfrozen
-  # fine-tuning (node_emb std 0.61 -> 0.19 by step 11,561), because
-  # configure_optimizers used a flat, unscheduled AdamW with zero LR
-  # warmup for the encoder. Fixed by carrying over the same
-  # warmup_cosine_lr_lambda already proven for pretrain_mae.py/jepa.py. v3
-  # followed v2 (hard switch to pure vMF at the warmup boundary), which
-  # followed v1 (raw vMF loss, no staging at all). None are safe to resume
-  # from.
-  dirpath: checkpoints/mae_finetune_v4/
+  # v5, not v4: v4 (LR-warmup fix for the unfrozen encoder) never actually
+  # collapsed and was the last confirmed-healthy mae_finetune checkpoint --
+  # v5 is not a bugfix over v4, it's the first run to opt into
+  # split_direction_head (see model.split_direction_head's comment above),
+  # testing the head-split fix in the regime it was actually validated for
+  # (pretrained encoder) after scratch_v6/v7 showed it collapsing under a
+  # fully cold-start encoder+heads. v4's other fixes all carry over
+  # unchanged: warmup_cosine_lr_lambda for the encoder, staged cos-distance
+  # + permanent low-weight vMF blend. v3 and earlier are not safe to resume
+  # from (see their own collapse histories above).
+  dirpath: checkpoints/mae_finetune_v5/
   filename: "epoch{epoch:04d}-step{step:09d}"

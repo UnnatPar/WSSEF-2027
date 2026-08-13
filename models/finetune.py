@@ -47,7 +47,13 @@ class SupervisedFineTune(pl.LightningModule):
         # rate statistic (sum-pooling in particular gives a count, confounded
         # with n_pulses, not a rate). Handing the heads the already-computed
         # ratio directly removes that reconstruction burden.
-        self.direction_head = DirectionHead(cfg.d + 1)
+        # split_direction_head defaults to False (the joint head) -- see
+        # DirectionHead's docstring for why: split=True is only validated
+        # for a pretrained/already-good encoder (mae_finetune/jepa_finetune),
+        # not the from-scratch cold-start regime.
+        self.direction_head = DirectionHead(
+            cfg.d + 1, split=getattr(cfg, "split_direction_head", False)
+        )
         self.classification_head = ClassificationHead(cfg.d + 1)
         self.kappa_head = nn.Linear(cfg.d + 1, 1)
         self.direction_loss_fn = VonMisesFisher3DLoss()
