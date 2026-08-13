@@ -1,7 +1,7 @@
 import torch
 from torch import Tensor, nn
 from torch_cluster import knn_graph
-from torch_geometric.nn import global_add_pool, global_max_pool, global_mean_pool
+from torch_geometric.nn import global_add_pool, global_max_pool
 from torch_scatter import scatter_softmax, scatter_sum
 
 
@@ -126,7 +126,15 @@ class PETEncoder(nn.Module):
             nn.Linear(6, d), nn.LayerNorm(d), nn.GELU()
         )
         self.blocks = nn.ModuleList([PETBlock(d, k) for _ in range(L)])
-        self.pool_proj = nn.Linear(3 * d, d)  # 3-way: mean + max + sum
+        # 2-way: max + sum, not 3-way with mean -- mean-pool dropped here,
+        # root cause fixed via direct ablation on a real trained checkpoint
+        # (scratch_v4, epoch 8): zeroing the mean-pool branch before
+        # pool_proj cost -0.04 deg (i.e. slightly *better* without it, noise-
+        # level either way), while zeroing max cost +0.26 deg and zeroing
+        # add/sum cost +8.49 deg -- mean-pool was carrying no real signal
+        # global_add_pool/global_max_pool didn't already provide, just extra
+        # unused parameters.
+        self.pool_proj = nn.Linear(2 * d, d)
         # LayerNorm after pool_proj -- root cause fixed here, confirmed
         # directly against a real checkpoint (configs/scratch.yaml's
         # from-scratch supervised experiment, step 4,252): encode_event's
@@ -159,7 +167,6 @@ class PETEncoder(nn.Module):
     def encode_event(self, x: Tensor, batch: Tensor, batch_size: int | None = None) -> Tensor:
         x = self.forward(x, batch, batch_size=batch_size)
         g = torch.cat([
-            global_mean_pool(x, batch),
             global_max_pool(x, batch),
             global_add_pool(x, batch),
         ], dim=-1)

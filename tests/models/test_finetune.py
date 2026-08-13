@@ -141,9 +141,15 @@ def test_build_supervised_model_loads_encoder_weights_from_jepa_checkpoint(tmp_p
 
     supervised_model = build_supervised_model(make_cfg(freeze_encoder=True), str(ckpt_path))
 
-    for jepa_param, loaded_param in zip(
-        jepa_model.encoder.parameters(), supervised_model.encoder.parameters()
-    ):
+    # pool_proj/pool_norm are always excluded from loading (see
+    # build_supervised_model's comment -- they're untrained by both MAE and
+    # JEPA pretraining, and pool_proj's shape can legitimately differ across
+    # checkpoint eras), so they're compared separately as "must NOT match"
+    # rather than included in the blanket equality loop below.
+    for jepa_name, jepa_param in jepa_model.encoder.named_parameters():
+        if jepa_name.startswith("pool_proj.") or jepa_name.startswith("pool_norm."):
+            continue
+        loaded_param = dict(supervised_model.encoder.named_parameters())[jepa_name]
         assert torch.equal(jepa_param, loaded_param)
     assert all(not p.requires_grad for p in supervised_model.encoder.parameters())
 
@@ -220,7 +226,10 @@ def test_build_supervised_model_tolerates_a_checkpoint_missing_pool_norm(tmp_pat
     confirmed directly, this broke both probe.py and finetune.py against a
     real v6 checkpoint. Simulates that exact old-format checkpoint here
     (PETEncoder's own state_dict with pool_norm keys stripped) and checks
-    loading succeeds, leaving pool_norm at its fresh init."""
+    loading succeeds, leaving pool_norm at its fresh init. pool_proj is now
+    excluded from loading unconditionally (see build_supervised_model), so
+    this also confirms that a checkpoint's pool_proj -- even when present --
+    is left alone rather than loaded."""
     from models.pet import PETEncoder
 
     encoder = PETEncoder(d=16, L=2, k=4)
@@ -231,11 +240,17 @@ def test_build_supervised_model_tolerates_a_checkpoint_missing_pool_norm(tmp_pat
     model = build_supervised_model(make_cfg(freeze_encoder=True), str(ckpt_path))
 
     for name, param in stale_state.items():
+        if name.startswith("pool_proj."):
+            continue
         assert torch.equal(param, model.encoder.state_dict()[name])
     # pool_norm wasn't in the checkpoint -- must still exist at its fresh,
     # untouched init (LayerNorm defaults: weight=1, bias=0), not crash.
     assert torch.equal(model.encoder.pool_norm.weight, torch.ones(16))
     assert torch.equal(model.encoder.pool_norm.bias, torch.zeros(16))
+    # pool_proj WAS in the checkpoint (only pool_norm was stripped above),
+    # but must NOT have been loaded -- always fresh-init, per
+    # build_supervised_model's comment.
+    assert not torch.equal(model.encoder.pool_proj.weight, stale_state["pool_proj.weight"])
 
 
 def test_load_full_checkpoint_restores_heads_not_just_encoder(tmp_path):

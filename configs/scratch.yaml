@@ -3,8 +3,25 @@ model:
   # when checkpoint_path is None. This is experiment 3.
   freeze_encoder: false
   d: 256
-  L: 6
-  k: 8
+  # L: 6 -> 4. Three independent measurements on scratch_v4's checkpoint
+  # converged on blocks 1-3 contributing little: LayerScale gate magnitude
+  # (blocks 0-3 barely moved off init, 1.4-2.6x, vs blocks 4-5's 6-10x),
+  # representation-change (blocks 1-3 near-identity, cosine(in,out)
+  # 0.96-0.99, vs block0's 0.795 and blocks 4-5's 0.56-0.63), and a
+  # layer-wise linear probe (block0/1 indistinguishable from random guess,
+  # real signal only from block2, most of the gain in blocks 4-5). This is
+  # the one change in this batch WITHOUT a direct reinit-and-retrain causal
+  # confirmation -- a real bet on the converging evidence, not a certainty,
+  # made instead of paying for that extra confirming run first (see the
+  # ledger's 2026-08-13 probe-battery entries for the full evidence).
+  L: 4
+  # k: 8 -> 12. Confirmed directly on scratch_v4's checkpoint: sweeping k at
+  # inference (no retrain) on the k=8-trained model gave k=12 -0.40 deg and
+  # k=16 -0.42 deg (both better than k=8), while k=4/k=6 were worse as
+  # expected (+2.39/+0.68) -- the model under-utilizes available
+  # neighborhood context at k=8. k=12 chosen over k=16 (nearly identical
+  # inference-time gain) since it's cheaper per knn_graph call.
+  k: 12
 
 training:
   batch_size: 256
@@ -40,15 +57,21 @@ data:
 
 logging:
   project: neutrinojepa
-  run_name: scratch_v4
+  run_name: scratch_v5
 
 checkpoint:
-  # v4, not v3: v3 (direction-loss blend + encoder LR warmup) still
-  # collapsed by step 30,922 (az/zen std 0.0034/0.0000) despite the encoder
-  # itself confirmed healthy (node_emb std=0.57) -- traced to
-  # DirectionHead's own internal layers having no normalization, fixed in
-  # models/heads.py. v3 followed v2 (pool_norm fix, still hit the vMF
-  # cold-start collapse), which followed v1 (pool_proj fed unnormalized
-  # into direction_head). None are safe to resume from.
-  dirpath: checkpoints/scratch_v4/
+  # v5, not v4: v4 reached 65.63 deg (epoch 6) then genuinely plateaued/
+  # regressed (67.19 deg by epoch 7) -- stopped deliberately, not a crash.
+  # This version batches every fix the resulting probe battery justified:
+  # ModelCheckpoint now actually tracks val/angular_error (train/
+  # supervised.py) instead of just keeping whatever was saved last -- v4's
+  # real best checkpoint (65.63 deg) was silently overwritten by this exact
+  # bug, so every v4-era probe ran against a worse, post-regression
+  # checkpoint. DirectionHead split into separate az/zen branches (models/
+  # heads.py, +18.9 deg zenith interference confirmed via direct A/B).
+  # encode_event's mean-pool branch dropped (models/pet.py, confirmed
+  # zero-cost ablation). k 8->12, L 6->4 (both above). v3 and earlier are
+  # not safe to resume from (see prior checkpoint dirs' own comments for
+  # their specific collapse histories).
+  dirpath: checkpoints/scratch_v5/
   filename: "epoch{epoch:04d}-step{step:09d}"

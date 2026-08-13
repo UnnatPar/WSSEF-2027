@@ -92,9 +92,9 @@ def test_pet_encoder_encode_event_norm_does_not_scale_with_event_size():
     x = torch.cat([small_event, large_event], dim=0)
     batch = torch.cat([torch.zeros(5, dtype=torch.long), torch.ones(100, dtype=torch.long)])
 
-    from torch_geometric.nn import global_add_pool, global_max_pool, global_mean_pool
+    from torch_geometric.nn import global_add_pool, global_max_pool
     pooled = torch.cat([
-        global_mean_pool(x, batch), global_max_pool(x, batch), global_add_pool(x, batch),
+        global_max_pool(x, batch), global_add_pool(x, batch),
     ], dim=-1)
     g = encoder.pool_norm(encoder.pool_proj(pooled))
     norms = g.norm(dim=-1)

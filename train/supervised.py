@@ -50,8 +50,18 @@ def run_supervised(
     # checkpointing matters: a real-scale epoch here can run for hours, well
     # past a Colab session's lifetime, so every_n_epochs=1 alone can lose an
     # entire epoch's progress to one session death.
+    # monitor="val/angular_error", mode="min" -- without this, save_top_k=1
+    # doesn't track the metric at all, it just keeps whichever checkpoint was
+    # saved most recently (functionally identical to save_last, since saves
+    # are on a 15-min timer). Confirmed directly: scratch_v4's actual best
+    # checkpoint (epoch 6, 65.63 deg) was silently overwritten by the time a
+    # real regression at epoch 7 (67.19 deg) was noticed and training
+    # stopped -- every probe/diagnostic run since had to use the worse,
+    # post-regression checkpoint because the true best one no longer existed
+    # on disk.
     callbacks = [ModelCheckpoint(
         dirpath=cfg.checkpoint.dirpath, filename=cfg.checkpoint.filename,
+        monitor="val/angular_error", mode="min",
         every_n_epochs=0, train_time_interval=timedelta(minutes=15),
         save_top_k=1, save_last=True,
     )]
