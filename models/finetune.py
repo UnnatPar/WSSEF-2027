@@ -157,8 +157,31 @@ class SupervisedFineTune(pl.LightningModule):
             global_step = None
         warmup_steps = getattr(self.cfg, "direction_warmup_steps", 0)
 
-        cos_sim = (pred_vec * true_vec).sum(-1)
-        direction_loss = (1 - cos_sim).mean()
+        if self.direction_head.split:
+            # Decomposed base loss for the split head -- root cause fixed
+            # here, confirmed directly: mae_finetune_v5 collapsed identically
+            # to scratch_v6 (kappa pinned at floor mean=1.0079 std=0.0002,
+            # az/zen pre-sigmoid deeply saturated, near-zero std across
+            # events) despite starting from an already-healthy pretrained
+            # encoder -- ruling out "cold encoder" as the cause. The real
+            # gap: probe4's original A/B evidence for split=True (+18.9 deg
+            # zenith recovery) trained each branch with its OWN simple
+            # per-target loss (circular distance for az, squared error for
+            # zen) -- real end-to-end training never used that, it always
+            # used the joint 3D VonMisesFisher3DLoss/cos-similarity on the
+            # COMBINED vector, a single signal two independently-initialized
+            # branches apparently cannot coordinate through regardless of
+            # encoder quality. Mirroring probe4's actual losses here (summed,
+            # backpropagated jointly through the shared encoder -- probe4
+            # itself never tested that combination, only fully independent
+            # training runs) is the real, previously-untested version of the
+            # split-head idea.
+            az_loss = (1 - torch.cos(az - batch.azimuth)).mean()
+            zen_loss = ((zen - batch.zenith) ** 2).mean()
+            direction_loss = az_loss + zen_loss
+        else:
+            cos_sim = (pred_vec * true_vec).sum(-1)
+            direction_loss = (1 - cos_sim).mean()
 
         if global_step is None or global_step >= warmup_steps:
             pred = torch.cat([pred_vec, kappa], dim=-1)

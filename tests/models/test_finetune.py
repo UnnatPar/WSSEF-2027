@@ -202,6 +202,49 @@ def test_vmf_loss_used_after_warmup_kappa_head_gets_gradient():
     assert all(p.grad is not None for p in model.kappa_head.parameters())
 
 
+def test_split_head_uses_decomposed_loss_both_branches_get_independent_gradient():
+    """Root cause fixed here, confirmed directly: mae_finetune_v5 (split
+    head, real joint VonMisesFisher3DLoss/cos-similarity as the base loss --
+    the same formula the joint head uses) collapsed identically to
+    scratch_v6 (kappa pinned at floor, az/zen deeply saturated near-zero
+    std) even with an already-healthy pretrained encoder, ruling out
+    encoder cold-start as the cause. probe4's original A/B evidence for
+    split=True never tested this joint-loss combination -- it trained each
+    branch on its OWN simple per-target loss (circular distance for az,
+    squared error for zen), fully independent, never summed and
+    backpropagated together through a shared encoder. This test locks in
+    that decomposed-and-summed loss is what a split-head model actually
+    uses, and that each branch gets a real, nonzero gradient from it
+    (necessary for training, not by itself sufficient to guarantee
+    convergence -- that's what the real training run watches for)."""
+    model = SupervisedFineTune(make_cfg(split_direction_head=True, direction_warmup_steps=1_000_000))
+    model.trainer = _FakeTrainer(global_step=0)
+    batch = make_labeled_batch(with_pid=False)
+    n_events = int(batch.batch.max().item()) + 1
+    g, az, zen, kappa = model._forward(batch, batch_size=n_events)
+    loss = model._compute_loss(batch, g, az, zen, kappa)
+    loss.backward()
+    assert all(p.grad is not None for p in model.direction_head.az_branch.parameters())
+    assert all(p.grad is not None for p in model.direction_head.zen_branch.parameters())
+    # still inside warmup (global_step 0 < 1_000_000) -- kappa must get no
+    # gradient here, matching the joint-head warmup behavior exactly.
+    assert all(p.grad is None for p in model.kappa_head.parameters())
+
+
+def test_joint_head_still_uses_combined_cos_distance_loss():
+    """Sanity check that split=False (the default, used by scratch) is
+    completely unaffected by the decomposed-loss branch above."""
+    model = SupervisedFineTune(make_cfg())
+    assert not model.direction_head.split
+    model.trainer = _FakeTrainer(global_step=0)
+    batch = make_labeled_batch(with_pid=False)
+    n_events = int(batch.batch.max().item()) + 1
+    g, az, zen, kappa = model._forward(batch, batch_size=n_events)
+    loss = model._compute_loss(batch, g, az, zen, kappa)
+    loss.backward()
+    assert all(p.grad is not None for p in model.direction_head.mlp.parameters())
+
+
 def test_direction_warmup_defaults_to_zero_when_cfg_lacks_the_field():
     """Backward compatibility: a cfg without direction_warmup_steps at all
     (e.g. an old config not yet updated) must behave exactly as before --

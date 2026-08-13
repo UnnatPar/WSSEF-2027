@@ -41,22 +41,27 @@ class DirectionHead(nn.Module):
     mechanism specifically at DirectionHead's own shared parameters.
 
     split=False (the default): the original joint head, one shared trunk
-    producing both outputs. Real regression found applying split=True
-    unconditionally: scratch_v6/v7 (encoder AND heads both cold, fully
-    random init) collapsed -- direct checkpoint inspection at step 9,551,
-    still inside pure-cos-distance warmup (kappa confirmed untouched,
-    std=0.1675, ruling out any vMF/kappa involvement), showed BOTH az and
-    zen branches already collapsing toward near-constant, deeply-saturated
-    pre-sigmoid outputs (az std=0.0114, zen std=0.0349) -- for comparison,
-    scratch_v4's joint head reached az std=2.38 by step 4,017, an order of
-    magnitude more diverse, dramatically earlier. The A/B evidence above was
-    gathered with an already-good, frozen `g`; two independently-initialized
-    branches coordinating on one joint 3D cos-similarity target through a
-    fully-random `g` (scratch's actual cold-start regime) appears to be a
-    genuinely harder problem the split evidence never covered. split=True is
-    scoped to configs where the encoder starts from a real pretrained
-    checkpoint (mae_finetune/jepa_finetune, closer to what was actually
-    tested) until re-validated for the from-scratch regime.
+    producing both outputs, trained via the joint 3D cos-similarity/vMF
+    loss. Used by `scratch` -- see the collapse history below for why.
+
+    split=True: real collapse found TWICE applying it with the same joint
+    3D loss the joint head uses -- scratch_v6/v7 (encoder AND heads both
+    cold) and, worse, mae_finetune_v5 (encoder already pretrained and
+    healthy, only the heads cold), which ruled out "cold encoder" as the
+    cause: both showed the identical signature (kappa pinned at its floor,
+    az/zen pre-sigmoid deeply saturated with near-zero cross-event std).
+    Root cause: probe4's original A/B evidence for split=True (+18.91 deg
+    zenith recovery on scratch_v4's frozen checkpoint) trained each branch
+    on its OWN simple per-target loss (circular distance for az, squared
+    error for zen) -- fully independent training runs, never summed and
+    backpropagated together through a shared encoder the way real training
+    actually works. Real training always used the joint VonMisesFisher3DLoss
+    on the combined 3D vector, a single signal two independently-initialized
+    branches apparently cannot coordinate through at all. Fixed in
+    `SupervisedFineTune._compute_loss`: when `direction_head.split`, the base
+    loss is the same decomposed sum probe4 actually validated (az circular
+    distance + zen squared error), not the joint cos-similarity -- the
+    previously-untested version of the split-head idea.
     """
 
     def __init__(self, d: int = 256, split: bool = False):
