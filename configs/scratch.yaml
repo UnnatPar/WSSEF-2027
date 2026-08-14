@@ -3,25 +3,27 @@ model:
   # when checkpoint_path is None. This is experiment 3.
   freeze_encoder: false
   d: 256
-  # L: 6 -> 4. Three independent measurements on scratch_v4's checkpoint
-  # converged on blocks 1-3 contributing little: LayerScale gate magnitude
-  # (blocks 0-3 barely moved off init, 1.4-2.6x, vs blocks 4-5's 6-10x),
-  # representation-change (blocks 1-3 near-identity, cosine(in,out)
-  # 0.96-0.99, vs block0's 0.795 and blocks 4-5's 0.56-0.63), and a
-  # layer-wise linear probe (block0/1 indistinguishable from random guess,
-  # real signal only from block2, most of the gain in blocks 4-5). This is
-  # the one change in this batch WITHOUT a direct reinit-and-retrain causal
-  # confirmation -- a real bet on the converging evidence, not a certainty,
-  # made instead of paying for that extra confirming run first (see the
-  # ledger's 2026-08-13 probe-battery entries for the full evidence).
-  L: 4
-  # k: 8 -> 12. Confirmed directly on scratch_v4's checkpoint: sweeping k at
-  # inference (no retrain) on the k=8-trained model gave k=12 -0.40 deg and
-  # k=16 -0.42 deg (both better than k=8), while k=4/k=6 were worse as
-  # expected (+2.39/+0.68) -- the model under-utilizes available
-  # neighborhood context at k=8. k=12 chosen over k=16 (nearly identical
-  # inference-time gain) since it's cheaper per knn_graph call.
-  k: 12
+  # L: 4, k: 12 -- BOTH REVERTED to v4's original 6/8. scratch_v8 (L=4, k=12,
+  # joint head -- otherwise architecturally identical to v4) collapsed the
+  # same way v6/v7 did (kappa pinned at floor, az/zen deeply saturated),
+  # despite the head itself being unchanged from v4's 160k+-step-proven-safe
+  # version. Root-caused to L=4 and/or k=12 specifically: both were only
+  # ever validated post-hoc, via inference-time analysis (LayerScale gate
+  # magnitude, representation-change cosine, a layer-wise probe, and an
+  # inference-only k-sweep) on scratch_v4's ALREADY-CONVERGED checkpoint --
+  # none of that evidence says anything about whether a shallower/wider
+  # network is harder to get through COLD-START optimization, a completely
+  # different question. mae_finetune_v6 (same dropped-mean-pool and
+  # aux_frac changes, but L=6/k=8, encoder pretrained not cold) trains
+  # fine, narrowing suspicion to L/k specifically rather than the pooling
+  # or aux_frac changes (g's statistics in the collapse diagnostic also
+  # looked completely normal, further weakening those two as causes).
+  # Reverting both at once rather than isolating further -- the probe
+  # evidence for L=4/k=12 was for a converged model's efficiency/accuracy,
+  # never claimed cold-start safety, so there's little lost by giving up
+  # both together here.
+  L: 6
+  k: 8
   # split_direction_head NOT set here (defaults to false, the joint head) --
   # see models/heads.py's DirectionHead docstring. split=True's evidence
   # (probe4) came from a frozen, already-good encoder; applying it
@@ -68,25 +70,26 @@ data:
 
 logging:
   project: neutrinojepa
-  run_name: scratch_v8
+  run_name: scratch_v9
 
 checkpoint:
-  # v8, not v7: v7 (direction_warmup_steps extended to 10000, still using
-  # the split head) ALSO collapsed -- direct checkpoint inspection at step
-  # 9,551 (still inside pure-cos-distance warmup, before vMF could be
-  # involved at all) showed both az and zen branches already collapsing
-  # toward near-constant, deeply-saturated outputs. This proved the warmup
-  # extension didn't address the real cause: two independently-initialized
-  # branches struggling to coordinate on one joint 3D loss through a fully
-  # random `g`, not a vMF/kappa-triggered collapse. v8 reverts to the joint
-  # DirectionHead (model.split_direction_head unset above) instead of
-  # patching warmup length again -- the split fix moves to
-  # configs/finetune_mae.yaml, where the encoder starts pretrained/good,
-  # matching what the split was actually validated against. v6/v7 are not
-  # safe to resume from. v8's changes vs v4, all still carried over:
-  # ModelCheckpoint now actually tracks val/angular_error (v4's real best
-  # checkpoint, 65.63 deg, was silently overwritten by this exact bug);
-  # encode_event's mean-pool branch dropped (confirmed zero-cost ablation);
-  # k 8->12, L 6->4; explicit aux_frac concatenated onto g.
-  dirpath: checkpoints/scratch_v8/
+  # v9, not v8: v8 (L=4, k=12, joint head) ALSO collapsed by step 39,065 --
+  # kappa pinned at floor (mean=1.0079, std=0.0000), az/zen deeply saturated
+  # (az std=0.0009, zen std=0.0000), the identical signature v6/v7 showed,
+  # despite v8's head being unchanged from v4's proven-safe joint version.
+  # See model.L/model.k's comment above for the full diagnosis: L/k reverted
+  # to v4's original 6/8, since both were only validated post-hoc on an
+  # already-converged model, never for cold-start trainability specifically.
+  # v6/v7/v8 are not safe to resume from. v9's changes vs v4, all still
+  # carried over: ModelCheckpoint now actually tracks val/angular_error
+  # (v4's real best checkpoint, 65.63 deg, was silently overwritten by this
+  # exact bug); encode_event's mean-pool branch dropped (confirmed
+  # zero-cost ablation, and g's statistics stayed normal through every
+  # collapse observed so far -- not implicated); explicit aux_frac
+  # concatenated onto g (same -- not implicated by any collapse evidence).
+  # If v9 ALSO collapses, the remaining unexplained-by-L/k possibility is
+  # aux_frac or the pooling change after all, or something not yet
+  # isolated -- would need actual ablation at that point, not further
+  # inference from mae_finetune_v6's non-identical comparison.
+  dirpath: checkpoints/scratch_v9/
   filename: "epoch{epoch:04d}-step{step:09d}"
